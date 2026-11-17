@@ -629,13 +629,17 @@ impl RecorderManager {
             }
             let mouflon_keys = api.mouflon_keys().clone();
 
+            // Graceful stop: finish the current segment round before merging.
+            // Cancelling fetch_segments here used to leave ffmpeg conversions
+            // half-written, which produced cut/missing chunks in the final video.
+            if stop_rx.try_recv().is_ok() {
+                tracing::info!("Stop signal received → {}", username);
+                break;
+            }
+
             let mut wait_next_round = true;
-            tokio::select! {
-                _ = stop_rx.recv() => {
-                    tracing::info!("Stop signal received → {}", username);
-                    break;
-                }
-                result = self.fetch_segments(
+            let result = self
+                .fetch_segments(
                     &api,
                     &current_playlist_url,
                     &url_prefix,
@@ -650,137 +654,144 @@ impl RecorderManager {
                     &mut last_sequence,
                     &mut segment_file_index,
                     &emitter,
-                ) => {
-                    let had_written = matches!(&result, Ok((n, _)) if *n > 0);
-                    match result {
-                        Ok((n, cdn_fail)) => {
-                            if cdn_fail > 0 {
-                                consecutive_cdn_failures += cdn_fail;
-                                total_failed += cdn_fail as u64;
-                            }
-                            if n > 0 {
-                                consecutive_cdn_failures = 0;
-                                retry_count = 0;
-                                total_downloaded += n as u64;
-                                let size_bytes = dir_size_bytes(&*session_dir).unwrap_or(0);
-                                let now = std::time::Instant::now();
-                                let speed_bps = last_size_snapshot.map(|(prev_size, prev_time)| {
-                                    let dt = now.duration_since(prev_time).as_secs_f64();
-                                    let ds = size_bytes.saturating_sub(prev_size) as f64;
-                                    if dt > 0.0 { ds / dt } else { 0.0 }
-                                });
-                                last_size_snapshot = Some((size_bytes, now));
+                )
+                .await;
+            let had_written = matches!(&result, Ok((n, _)) if *n > 0);
+            match result {
+                Ok((n, cdn_fail)) => {
+                    if cdn_fail > 0 {
+                        consecutive_cdn_failures += cdn_fail;
+                        total_failed += cdn_fail as u64;
+                    }
+                    if n > 0 {
+                        consecutive_cdn_failures = 0;
+                        retry_count = 0;
+                        total_downloaded += n as u64;
+                        let size_bytes = dir_size_bytes(&*session_dir).unwrap_or(0);
+                        let now = std::time::Instant::now();
+                        let speed_bps = last_size_snapshot.map(|(prev_size, prev_time)| {
+                            let dt = now.duration_since(prev_time).as_secs_f64();
+                            let ds = size_bytes.saturating_sub(prev_size) as f64;
+                            if dt > 0.0 { ds / dt } else { 0.0 }
+                        });
+                        last_size_snapshot = Some((size_bytes, now));
 
-                                // 计算对应的视频文件路径（合并目标），用于 meta 更新和前端匹配
-                                // Compute the corresponding video file path (merge target) for meta update and frontend matching
-                                let settings = self.state.get_settings();
-                                let video_path =
-                                    settings.video_path_for_session(session_dir.as_path());
+                        // 计算对应的视频文件路径（合并目标），用于 meta 更新和前端匹配
+                        // Compute the corresponding video file path (merge target) for meta update and frontend matching
+                        let settings = self.state.get_settings();
+                        let video_path =
+                            settings.video_path_for_session(session_dir.as_path());
 
-                                // 将实时文件大小写入 meta JSON
-                                // Write real-time file size to meta JSON
-                                if let Some(mut meta) =
-                                    crate::recording::meta::read_meta(&settings, &video_path)
-                                    && meta.size_bytes != size_bytes
-                                {
-                                    meta.size_bytes = size_bytes;
-                                    crate::recording::meta::write_meta(&settings, &video_path, &meta);
-                                }
-
-                                let mut payload = serde_json::json!({
-                                    "path": video_path.to_string_lossy(),
-                                    "segment_count": downloaded_sequences.len(),
-                                    "size_bytes": size_bytes,
-                                    "segments_downloaded": total_downloaded,
-                                    "segments_failed": total_failed,
-                                });
-                                if let Some(spd) = speed_bps {
-                                    payload["speed_bps"] = serde_json::json!(spd);
-                                }
-                                emitter.emit("recording-file-update", &payload);
-                            } else {
-                                retry_count += 1;
-                            }
-                            if consecutive_cdn_failures >= CDN_FAILURE_REFRESH_THRESHOLD {
-                                tracing::error!(
-                                    "Fetch error → {}: {} consecutive CDN failures, refreshing playlist",
-                                    username, consecutive_cdn_failures
-                                );
-                                consecutive_cdn_failures = 0;
-                                match api.get_stream_info(username, true).await {
-                                    Ok(info) => {
-                                        if let Some(new_url) = info.playlist_url {
-                                            tracing::info!("Refreshed playlist URL → {}", username);
-                                            url_prefix = get_url_prefix(&new_url);
-                                            current_playlist_url = new_url;
-                                            playlist_refresh_failures = 0;
-                                            retry_count = 0;
-                                            wait_next_round = false;
-                                        } else if !info.is_recordable {
-                                            tracing::warn!("Stream no longer recordable → {} (status: {}), stopping", username, info.status);
-                                            break;
-                                        } else {
-                                            playlist_refresh_failures += 1;
-                                        }
-                                    }
-                                    Err(refresh_err) => {
-                                        tracing::error!("Playlist refresh failed → {}: {}", username, refresh_err);
-                                        playlist_refresh_failures += 1;
-                                    }
-                                }
-                                if playlist_refresh_failures >= MAX_PLAYLIST_REFRESH_FAILURES {
-                                    tracing::warn!("Stream ended → {} (playlist refresh failed {} times)", username, playlist_refresh_failures);
-                                    break;
-                                }
-                            }
+                        // 将实时文件大小写入 meta JSON
+                        // Write real-time file size to meta JSON
+                        if let Some(mut meta) =
+                            crate::recording::meta::read_meta(&settings, &video_path)
+                            && meta.size_bytes != size_bytes
+                        {
+                            meta.size_bytes = size_bytes;
+                            crate::recording::meta::write_meta(&settings, &video_path, &meta);
                         }
-                        Err(e) => {
-                            tracing::error!("Fetch error → {}: {}, attempting playlist refresh", username, e);
-                            consecutive_cdn_failures = 0;
-                            match api.get_stream_info(username, true).await {
-                                Ok(info) => {
-                                    if let Some(new_url) = info.playlist_url {
-                                        tracing::info!("Refreshed playlist URL → {}", username);
-                                        url_prefix = get_url_prefix(&new_url);
-                                        current_playlist_url = new_url;
-                                        playlist_refresh_failures = 0;
-                                        retry_count = 0;
-                                        wait_next_round = false;
-                                    } else if !info.is_recordable {
-                                        tracing::warn!("Stream no longer recordable → {} (status: {}), stopping", username, info.status);
-                                        break;
-                                    } else {
-                                        tracing::warn!("No playlist URL yet → {} (status: {}), retrying", username, info.status);
-                                        playlist_refresh_failures += 1;
-                                    }
-                                }
-                                Err(refresh_err) => {
-                                    tracing::error!("Playlist refresh failed → {}: {}", username, refresh_err);
+
+                        let mut payload = serde_json::json!({
+                            "path": video_path.to_string_lossy(),
+                            "segment_count": downloaded_sequences.len(),
+                            "size_bytes": size_bytes,
+                            "segments_downloaded": total_downloaded,
+                            "segments_failed": total_failed,
+                        });
+                        if let Some(spd) = speed_bps {
+                            payload["speed_bps"] = serde_json::json!(spd);
+                        }
+                        emitter.emit("recording-file-update", &payload);
+                    } else {
+                        retry_count += 1;
+                    }
+                    if consecutive_cdn_failures >= CDN_FAILURE_REFRESH_THRESHOLD {
+                        tracing::error!(
+                            "Fetch error → {}: {} consecutive CDN failures, refreshing playlist",
+                            username, consecutive_cdn_failures
+                        );
+                        consecutive_cdn_failures = 0;
+                        match api.get_stream_info(username, true).await {
+                            Ok(info) => {
+                                if let Some(new_url) = info.playlist_url {
+                                    tracing::info!("Refreshed playlist URL → {}", username);
+                                    url_prefix = get_url_prefix(&new_url);
+                                    current_playlist_url = new_url;
+                                    playlist_refresh_failures = 0;
+                                    retry_count = 0;
+                                    wait_next_round = false;
+                                } else if !info.is_recordable {
+                                    tracing::warn!("Stream no longer recordable → {} (status: {}), stopping", username, info.status);
+                                    break;
+                                } else {
+                                    tracing::warn!("No playlist URL yet → {} (status: {}), retrying", username, info.status);
                                     playlist_refresh_failures += 1;
                                 }
                             }
-                            if playlist_refresh_failures >= MAX_PLAYLIST_REFRESH_FAILURES {
-                                tracing::warn!("Stream ended → {} (playlist refresh failed {} times)", username, playlist_refresh_failures);
-                                break;
+                            Err(refresh_err) => {
+                                tracing::error!("Playlist refresh failed → {}: {}", username, refresh_err);
+                                playlist_refresh_failures += 1;
                             }
                         }
-                    }
-                    if retry_count >= MAX_RETRIES {
-                        tracing::warn!("Stream ended → {} (max retries)", username);
-                        break;
-                    }
-                    if wait_next_round {
-                        // 自适应轮询间隔：若本轮有新分片写入，说明正在产生数据，缩短等待至 500ms 紧随直播边缘；
-                        // 若未发现新分片，则等待 1000ms 避免过度请求
-                        // Adaptive polling: 500ms when actively receiving segments, 1000ms when idle
-                        let sleep_ms = if had_written {
-                            500
-                        } else {
-                            1000
-                        };
-                        tokio::time::sleep(tokio::time::Duration::from_millis(sleep_ms)).await;
+                        if playlist_refresh_failures >= MAX_PLAYLIST_REFRESH_FAILURES {
+                            tracing::warn!("Stream ended → {} (playlist refresh failed {} times)", username, playlist_refresh_failures);
+                            break;
+                        }
                     }
                 }
+                Err(e) => {
+                    tracing::error!("Fetch error → {}: {}, attempting playlist refresh", username, e);
+                    consecutive_cdn_failures = 0;
+                    match api.get_stream_info(username, true).await {
+                        Ok(info) => {
+                            if let Some(new_url) = info.playlist_url {
+                                tracing::info!("Refreshed playlist URL → {}", username);
+                                url_prefix = get_url_prefix(&new_url);
+                                current_playlist_url = new_url;
+                                playlist_refresh_failures = 0;
+                                retry_count = 0;
+                                wait_next_round = false;
+                            } else if !info.is_recordable {
+                                tracing::warn!("Stream no longer recordable → {} (status: {}), stopping", username, info.status);
+                                break;
+                            } else {
+                                tracing::warn!("No playlist URL yet → {} (status: {}), retrying", username, info.status);
+                                playlist_refresh_failures += 1;
+                            }
+                        }
+                        Err(refresh_err) => {
+                            tracing::error!("Playlist refresh failed → {}: {}", username, refresh_err);
+                            playlist_refresh_failures += 1;
+                        }
+                    }
+                    if playlist_refresh_failures >= MAX_PLAYLIST_REFRESH_FAILURES {
+                        tracing::warn!("Stream ended → {} (playlist refresh failed {} times)", username, playlist_refresh_failures);
+                        break;
+                    }
+                }
+            }
+            if retry_count >= MAX_RETRIES {
+                tracing::warn!("Stream ended → {} (max retries)", username);
+                break;
+            }
+            if wait_next_round {
+                // 自适应轮询间隔：若本轮有新分片写入，说明正在产生数据，缩短等待至 500ms 紧随直播边缘；
+                // 若未发现新分片，则等待 1000ms 避免过度请求
+                // Adaptive polling: 500ms when actively receiving segments, 1000ms when idle
+                let sleep_ms = if had_written {
+                    500
+                } else {
+                    1000
+                };
+                tokio::time::sleep(tokio::time::Duration::from_millis(sleep_ms)).await;
+            }
+
+            // Honour a stop that arrived while the round was in flight, but
+            // only after all of its segments are fully written and renamed.
+            if stop_rx.try_recv().is_ok() {
+                tracing::info!("Stop signal received → {}", username);
+                break;
             }
         }
 
@@ -1007,13 +1018,19 @@ async fn convert_to_ts(fmp4_data: Vec<u8>, ts_path: &PathBuf) -> Result<()> {
         .await
         .map_err(|e| AppError::Other(format!("ffmpeg semaphore: {}", e)))?;
 
+    // Write to a temporary file first, then atomically rename on success.
+    // This guarantees the merge never sees a half-written .ts segment if a
+    // recording is stopped while ffmpeg is still converting it.
+    let tmp_path = ts_path.with_extension("ts.tmp");
+    let _ = fs::remove_file(&tmp_path);
+
     let mut child = {
         #[cfg(windows)]
         {
             tokio::process::Command::new("ffmpeg")
                 .creation_flags(0x08000000)
                 .args(["-y", "-loglevel", "warning", "-i", "pipe:0", "-c", "copy", "-muxdelay", "0", "-f", "mpegts"])
-                .arg(ts_path)
+                .arg(&tmp_path)
                 .stdin(Stdio::piped())
                 .stdout(Stdio::null())
                 .stderr(Stdio::piped())
@@ -1024,7 +1041,7 @@ async fn convert_to_ts(fmp4_data: Vec<u8>, ts_path: &PathBuf) -> Result<()> {
         {
             tokio::process::Command::new("ffmpeg")
                 .args(["-y", "-loglevel", "warning", "-i", "pipe:0", "-c", "copy", "-muxdelay", "0", "-f", "mpegts"])
-                .arg(ts_path)
+                .arg(&tmp_path)
                 .stdin(Stdio::piped())
                 .stdout(Stdio::null())
                 .stderr(Stdio::piped())
@@ -1042,16 +1059,25 @@ async fn convert_to_ts(fmp4_data: Vec<u8>, ts_path: &PathBuf) -> Result<()> {
     let output = child
         .wait_with_output()
         .await
-        .map_err(|e| AppError::Other(format!("ffmpeg wait: {}", e)))?;
+        .map_err(|e| {
+            let _ = fs::remove_file(&tmp_path);
+            AppError::Other(format!("ffmpeg wait: {}", e))
+        })?;
 
     if !output.status.success() {
         let err_msg = String::from_utf8_lossy(&output.stderr);
+        let _ = fs::remove_file(&tmp_path);
         return Err(AppError::Other(format!(
             "ffmpeg exited with {}: {}",
             output.status,
             err_msg.trim()
         )));
     }
+
+    fs::rename(&tmp_path, ts_path).map_err(|e| {
+        let _ = fs::remove_file(&tmp_path);
+        AppError::Other(format!("Failed to finalize segment {:?}: {}", ts_path, e))
+    })?;
     Ok(())
 }
 
@@ -1860,6 +1886,43 @@ mod tests {
         let probed = get_video_duration(&output_video);
         assert_eq!(probed, Some(4));
 
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_merge_segments_ignores_temporary_ts_files() {
+        let temp_dir = std::env::temp_dir().join(format!("rec_test_tmp_{}", std::process::id()));
+        let session_dir = temp_dir.join("session_tmp");
+        let _ = fs::remove_dir_all(&temp_dir);
+        fs::create_dir_all(&session_dir).unwrap();
+
+        let seg1 = session_dir.join("test_seg000001.ts");
+        let seg2 = session_dir.join("test_seg000002.ts");
+        generate_test_ts(&seg1, 2);
+        generate_test_ts(&seg2, 2);
+        append_to_m3u8(&session_dir, &seg1, 2.0, false);
+        append_to_m3u8(&session_dir, &seg2, 2.0, false);
+
+        // Simulate an in-flight conversion that was interrupted: the temp file
+        // must never be included by the merge.
+        fs::write(session_dir.join("test_seg000003.ts.tmp"), b"partial").unwrap();
+
+        let output_video = temp_dir.join("final_tmp.mp4");
+        let emitter: Arc<dyn Emitter> = Arc::new(NoopEmitter);
+        let settings = Settings::default();
+        let session_dir_str = session_dir.to_string_lossy().to_string();
+
+        let duration = merge_segments(
+            &session_dir,
+            &output_video,
+            "test_user",
+            &emitter,
+            &session_dir_str,
+            &settings,
+        );
+
+        assert_eq!(duration, Some(4));
+        assert_eq!(get_video_duration(&output_video), Some(4));
         let _ = fs::remove_dir_all(&temp_dir);
     }
 
