@@ -45,7 +45,7 @@ RUN mkdir -vp ${CARGO_HOME:-$HOME/.cargo} && \
 WORKDIR /app
 COPY . /app
 
-RUN . /root/.cargo/env && npm run build
+RUN . /root/.cargo/env && npm run build && cargo test --manifest-path /app/modules/pp_utils/Cargo.toml --lib
 
 # ── Runtime image ──────────────────────────────────────────────────────────────
 FROM debian:latest

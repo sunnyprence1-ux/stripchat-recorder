@@ -1391,6 +1391,12 @@ fn merge_segments(
             if let Err(e) = fs::remove_dir_all(session_dir) {
                 tracing::error!("Failed to remove segment dir: {}", e);
             }
+            // Re-mux MP4 output so the container duration is rebuilt from the
+            // packet timeline. Without this, some concat outputs are playable
+            // but report 0 seconds, which Telegram shows as 00:00.
+            if is_mp4 {
+                normalize_mp4_duration(&output_path);
+            }
             let duration = get_video_duration(&output_path);
 
             // 更新 meta：填入实际大小、时长，status 暂设为 "merging"（调用方会进一步更新）
@@ -1419,26 +1425,161 @@ fn merge_segments(
     }
 }
 
-/// 使用 ffprobe 获取视频文件的时长（秒）。
-/// Get the duration of a video file in seconds using ffprobe.
-pub fn get_video_duration(path: &std::path::Path) -> Option<u64> {
+/// Re-mux a merged MP4 through ffmpeg once so the container header carries the
+/// real duration. Some concat outputs have a valid packet timeline but a zero
+/// `mvhd.duration`, which makes Telegram display 00:00 for a playable file.
+fn normalize_mp4_duration(path: &std::path::Path) {
+    let is_mp4 = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| matches!(e.to_ascii_lowercase().as_str(), "mp4" | "m4v" | "mov"))
+        .unwrap_or(false);
+    if !is_mp4 {
+        return;
+    }
+
+    let tmp_path = path.with_extension("duration_fix.mp4");
+    let _ = fs::remove_file(&tmp_path);
+    let status = Command::new("ffmpeg")
+        .arg("-y")
+        .args(["-v", "error", "-i"])
+        .arg(path)
+        .args(["-c", "copy", "-movflags", "+faststart"])
+        .arg(&tmp_path)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+
+    match status {
+        Ok(s) if s.success() => {
+            if fs::metadata(&tmp_path).map(|m| m.len()).unwrap_or(0) > 0 {
+                if let Err(e) = fs::rename(&tmp_path, path) {
+                    tracing::warn!("Failed to finalize normalized MP4 {:?}: {}", path, e);
+                    let _ = fs::remove_file(&tmp_path);
+                }
+            } else {
+                let _ = fs::remove_file(&tmp_path);
+            }
+        }
+        Ok(s) => {
+            tracing::warn!("MP4 duration normalize exited with {}: {:?}", s, path);
+            let _ = fs::remove_file(&tmp_path);
+        }
+        Err(e) => {
+            tracing::warn!("Failed to normalize MP4 duration {:?}: {}", path, e);
+            let _ = fs::remove_file(&tmp_path);
+        }
+    }
+}
+
+fn ffprobe_output(path: &std::path::Path, args: &[&str]) -> Option<String> {
     let output = Command::new("ffprobe")
-        .args([
-            "-v",
-            "error",
-            "-show_entries",
-            "format=duration",
-            "-of",
-            "default=noprint_wrappers=1:nokey=1",
-        ])
+        .arg("-v")
+        .arg("error")
+        .args(args)
         .arg(path)
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .output()
         .ok()?;
+    Some(String::from_utf8_lossy(&output.stdout).into_owned())
+}
 
-    let s = String::from_utf8_lossy(&output.stdout);
-    s.trim().parse::<f64>().ok().map(|d| d as u64)
+fn ffprobe_positive_duration(output: &str) -> Option<f64> {
+    let mut max_duration = 0.0_f64;
+    for line in output.lines() {
+        if let Ok(value) = line.trim().parse::<f64>() {
+            if value.is_finite() && value > 0.0 {
+                max_duration = max_duration.max(value);
+            }
+        }
+    }
+    if max_duration > 0.0 { Some(max_duration) } else { None }
+}
+
+fn ffprobe_packet_duration(output: &str) -> Option<f64> {
+    let mut max_pts = 0.0_f64;
+    let mut max_end = 0.0_f64;
+    let mut found = false;
+    for line in output.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let mut fields = line.split(',');
+        let pts = fields
+            .next()
+            .and_then(|v| v.trim().parse::<f64>().ok())
+            .filter(|v| v.is_finite() && *v >= 0.0);
+        let dur = fields
+            .next()
+            .and_then(|v| v.trim().parse::<f64>().ok())
+            .filter(|v| v.is_finite() && *v >= 0.0);
+        match (pts, dur) {
+            (Some(p), Some(d)) => {
+                found = true;
+                max_pts = max_pts.max(p);
+                max_end = max_end.max(p + d);
+            }
+            (Some(p), None) => {
+                found = true;
+                max_pts = max_pts.max(p);
+            }
+            _ => {}
+        }
+    }
+    let duration = max_end.max(max_pts);
+    if found && duration > 0.0 { Some(duration) } else { None }
+}
+
+/// 使用 ffprobe 获取视频文件的时长（秒），带回退探测。
+/// Get the duration of a video file in seconds using ffprobe, with fallbacks.
+pub fn get_video_duration(path: &std::path::Path) -> Option<u64> {
+    if let Some(duration) = ffprobe_output(
+        path,
+        &[
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+        ],
+    )
+    .as_deref()
+    .and_then(ffprobe_positive_duration)
+    {
+        return Some(duration as u64);
+    }
+
+    if let Some(duration) = ffprobe_output(
+        path,
+        &[
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+        ],
+    )
+    .as_deref()
+    .and_then(ffprobe_positive_duration)
+    {
+        return Some(duration as u64);
+    }
+
+    let packets = ffprobe_output(
+        path,
+        &[
+            "-select_streams",
+            "v:0",
+            "-show_packets",
+            "-show_entries",
+            "packet=pts_time,duration_time",
+            "-of",
+            "csv=p=0",
+        ],
+    )?;
+    ffprobe_packet_duration(&packets).map(|d| d as u64)
 }
 
 /// 启动时扫描输出目录，合并所有遗留的未完成录制片段，并对未后处理的视频触发后处理。
@@ -2012,5 +2153,18 @@ mod tests {
         );
         assert_eq!(r4, vec![1, 2, 3]);
         assert_eq!(last_sequence, Some(3));
+    }
+
+    #[test]
+    fn test_ffprobe_positive_duration_parser() {
+        assert_eq!(ffprobe_positive_duration("0.000000\nN/A\n120.500000\n"), Some(120.5));
+        assert_eq!(ffprobe_positive_duration("0.000000\nN/A\n"), None);
+    }
+
+    #[test]
+    fn test_ffprobe_packet_duration_parser() {
+        let csv = "0.000000,2.000000\nN/A,N/A\n2.000000,N/A\n5.000000,1.000000\n";
+        assert_eq!(ffprobe_packet_duration(csv), Some(6.0));
+        assert_eq!(ffprobe_packet_duration("0.000000,0.000000\n"), None);
     }
 }

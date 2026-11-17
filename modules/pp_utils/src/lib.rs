@@ -57,31 +57,132 @@ pub fn param_bool(key: &str, fallback: bool) -> bool {
     )
 }
 
-/// 使用 ffprobe 获取视频文件的时长（秒）。
-/// Get the duration of a video file in seconds using ffprobe.
-///
-/// # 返回值 / Returns
-/// 视频时长（秒），ffprobe 不可用或解析失败时返回 `None`。
-/// Video duration in seconds, or `None` if ffprobe is unavailable or parsing fails.
-pub fn video_duration(input: &Path) -> Option<f64> {
+/// Run ffprobe with `-v error` plus the supplied arguments and return stdout.
+fn ffprobe_stdout(input: &Path, args: &[&str]) -> Option<String> {
     let out = Command::new("ffprobe")
-        .args([
-            "-v",
-            "error",
-            "-show_entries",
-            "format=duration",
-            "-of",
-            "default=noprint_wrappers=1:nokey=1",
-        ])
+        .arg("-v")
+        .arg("error")
+        .args(args)
         .arg(input)
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .output()
         .ok()?;
-    String::from_utf8_lossy(&out.stdout)
-        .trim()
-        .parse::<f64>()
-        .ok()
+    Some(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// Parse a finite, strictly positive duration value. `0` and `N/A` are rejected.
+fn positive_f64(s: &str) -> Option<f64> {
+    let value = s.trim().parse::<f64>().ok()?;
+    if value.is_finite() && value > 0.0 {
+        Some(value)
+    } else {
+        None
+    }
+}
+
+/// Parse a finite timestamp/duration value, allowing `0`.
+fn nonnegative_f64(s: &str) -> Option<f64> {
+    let value = s.trim().parse::<f64>().ok()?;
+    if value.is_finite() && value >= 0.0 {
+        Some(value)
+    } else {
+        None
+    }
+}
+
+/// Derive duration from ffprobe's packet CSV (`pts_time,duration_time`).
+/// Some merged MP4s have `format.duration = 0` while all packets are valid;
+/// taking the furthest packet end recovers the real playable duration.
+fn packet_timeline_duration(csv: &str) -> Option<f64> {
+    let mut max_pts = 0.0_f64;
+    let mut max_end = 0.0_f64;
+    let mut found_any = false;
+
+    for line in csv.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let mut fields = line.split(',');
+        let pts = fields.next().and_then(nonnegative_f64);
+        let dur = fields.next().and_then(nonnegative_f64);
+        match (pts, dur) {
+            (Some(p), Some(d)) => {
+                found_any = true;
+                max_pts = max_pts.max(p);
+                max_end = max_end.max(p + d);
+            }
+            (Some(p), None) => {
+                found_any = true;
+                max_pts = max_pts.max(p);
+            }
+            _ => {}
+        }
+    }
+
+    if !found_any {
+        return None;
+    }
+    let duration = max_end.max(max_pts);
+    if duration > 0.0 { Some(duration) } else { None }
+}
+
+/// Query a single numeric ffprobe field and return the largest positive value.
+fn ffprobe_duration(input: &Path, args: &[&str]) -> Option<f64> {
+    let output = ffprobe_stdout(input, args)?;
+    output.lines().filter_map(positive_f64).max()
+}
+
+/// 使用 ffprobe 获取视频文件的时长（秒），带回退探测。
+/// Get the duration of a video file in seconds using ffprobe, with fallbacks.
+///
+/// Tries container duration, then video-stream duration, then the packet
+/// timeline. This prevents playable merged MP4s with a zero container duration
+/// from being reported as 0 seconds.
+pub fn video_duration(input: &Path) -> Option<f64> {
+    // 1) Container duration (fast path).
+    if let Some(duration) = ffprobe_duration(
+        input,
+        &[
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+        ],
+    ) {
+        return Some(duration);
+    }
+
+    // 2) Video stream duration (container duration can be 0/N/A).
+    if let Some(duration) = ffprobe_duration(
+        input,
+        &[
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+        ],
+    ) {
+        return Some(duration);
+    }
+
+    // 3) Packet timeline (last resort for otherwise playable files).
+    let packets = ffprobe_stdout(
+        input,
+        &[
+            "-select_streams",
+            "v:0",
+            "-show_packets",
+            "-show_entries",
+            "packet=pts_time,duration_time",
+            "-of",
+            "csv=p=0",
+        ],
+    )?;
+    packet_timeline_duration(&packets)
 }
 
 /// 将秒数格式化为 `HH:MM:SS` 格式的时长字符串。
@@ -310,27 +411,25 @@ pub fn image_dimensions(path: &Path) -> Option<(u32, u32)> {
 /// `(duration_secs, width, height)`，失败时返回 `None`。
 /// `(duration_secs, width, height)`, or `None` on failure.
 pub fn video_meta(input: &Path) -> Option<(f64, i32, i32)> {
-    let out = Command::new("ffprobe")
-        .args([
-            "-v", "error",
-            "-select_streams", "v:0",
-            "-show_entries", "format=duration:stream=width,height",
-            "-of", "csv=p=0",
-        ])
-        .arg(input)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .output()
-        .ok()?;
-    let s = String::from_utf8_lossy(&out.stdout);
-    let mut lines = s.lines().filter(|l| !l.trim().is_empty());
-    let dims_line = lines.next()?;
-    let dur_line = lines.next()?;
+    // Use the robust duration path; the old single `format=duration` probe
+    // returned 0 for some merged MP4s, which Telegram displayed as 00:00.
+    let duration = video_duration(input)?;
+    let dims = ffprobe_stdout(
+        input,
+        &[
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=width,height",
+            "-of",
+            "csv=p=0",
+        ],
+    )?;
+    let dims_line = dims.lines().find(|line| line.contains(','))?;
     let mut dims = dims_line.splitn(2, ',');
     let w: i32 = dims.next()?.trim().parse().ok()?;
     let h: i32 = dims.next()?.trim().parse().ok()?;
-    let dur: f64 = dur_line.trim().parse().ok()?;
-    Some((dur, w, h))
+    Some((duration, w, h))
 }
 
 /// 进度上报的缩放基数（10000 = 100.00%）。
@@ -463,5 +562,24 @@ mod tests {
         let parsed = sidecar_dir();
         unsafe { env::remove_var("PP_SIDECAR_DIR") };
         assert_eq!(parsed, None);
+    }
+
+    #[test]
+    fn packet_timeline_recovers_duration_when_container_duration_is_zero() {
+        let csv = "0.000000,2.000000\nN/A,N/A\n2.000000,N/A\n5.000000,1.000000\n";
+        assert_eq!(packet_timeline_duration(csv), Some(6.0));
+    }
+
+    #[test]
+    fn packet_timeline_ignores_empty_and_invalid_rows() {
+        assert_eq!(packet_timeline_duration("\n\nN/A,N/A\n"), None);
+        assert_eq!(packet_timeline_duration("0.000000,0.000000\n"), None);
+    }
+
+    #[test]
+    fn positive_duration_parser_rejects_zero_and_na() {
+        assert_eq!(positive_f64("120.5"), Some(120.5));
+        assert_eq!(positive_f64("0.000000"), None);
+        assert_eq!(positive_f64("N/A"), None);
     }
 }
