@@ -196,6 +196,10 @@ const COMMAND_MAP: Record<
 		url: () => "/api/recordings/delete",
 		body: (a) => ({ path: a.path }),
 	},
+	clean_everything: {
+		method: "POST",
+		url: () => "/api/recordings/clean-all",
+	},
 	run_postprocess_cmd: {
 		method: "POST",
 		url: () => "/api/recordings/postprocess",

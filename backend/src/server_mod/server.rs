@@ -151,6 +151,7 @@ pub fn build_router(state: ServerState) -> Router {
         .route("/api/recordings", get(list_recordings))
         .route("/api/recordings/merging", get(get_merging_dirs_handler))
         .route("/api/recordings/delete", post(delete_recording))
+        .route("/api/recordings/clean-all", post(clean_all))
         .route("/api/recordings/open", post(open_recording))
         .route("/api/recordings/open-dir", post(open_output_dir))
         .route("/api/recordings/postprocess", post(run_postprocess))
@@ -741,6 +742,31 @@ async fn delete_recording(
         &serde_json::json!({ "path": body.path }),
     );
     Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+/// 清理录制目录与临时文件（保留正在录制/合并/上传的文件）。
+/// Clean recording directories and temp files, preserving in-use files.
+async fn clean_all(AxumState(s): AxumState<ServerState>) -> ApiResult<serde_json::Value> {
+    let recorder = Arc::clone(&s.recorder);
+    let state = Arc::clone(&s.app_state);
+    let report = tokio::task::spawn_blocking(move || {
+        crate::commands::recording_cmd::clean_all_inner(&recorder, &state)
+    })
+    .await
+    .map_err(|e| ApiError(e.to_string()))?
+    .map_err(|e| ApiError(e.to_string()))?;
+
+    // The filesystem watcher normally emits this, but emit explicitly too so
+    // every connected client refreshes immediately after the bulk delete.
+    s.emitter.emit(
+        "recordings-dir-changed",
+        &serde_json::json!({
+            "removed": report.removed,
+            "freedBytes": report.freed_bytes,
+            "skipped": report.skipped,
+        }),
+    );
+    Ok(Json(serde_json::json!({ "ok": true, "report": report })))
 }
 
 async fn open_recording(Json(body): Json<PathBody>) -> ApiResult<serde_json::Value> {

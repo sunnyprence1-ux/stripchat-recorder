@@ -7,8 +7,9 @@
 use crate::config::settings::AppState;
 use crate::core::error::Result;
 use crate::recording::recorder::RecorderManager;
+use std::collections::HashSet;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 /// 录制文件元数据（序列化后返回给前端）/ Recording file metadata (serialized and returned to the frontend)
@@ -276,6 +277,254 @@ pub fn delete_recording_inner(
     Ok(())
 }
 
+/// 一键清理结果 / Result of the clean-everything action.
+#[derive(Debug, serde::Serialize)]
+pub struct CleanReport {
+    /// 已删除的顶层文件/目录数量 / Number of top-level entries removed
+    pub removed: usize,
+    /// 释放的字节数 / Bytes freed
+    pub freed_bytes: u64,
+    /// 因正在使用或路径不安全而跳过的条目数 / Entries skipped because they are in use or unsafe
+    pub skipped: usize,
+}
+
+/// Canonicalize when possible, otherwise keep the lexical path. Used only for
+/// containment checks, never for deletion itself.
+fn canonical_lossy(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+}
+
+/// True when `path` is inside `root`, but not `root` itself.
+fn is_within(path: &Path, root: &Path) -> bool {
+    let p = canonical_lossy(path);
+    let r = canonical_lossy(root);
+    p.starts_with(&r) && p != r
+}
+
+/// True when two paths are the same, or one contains the other. Used to keep
+/// active recording/merge/upload targets and their parent directories.
+fn paths_conflict(a: &Path, b: &Path) -> bool {
+    let a = canonical_lossy(a);
+    let b = canonical_lossy(b);
+    a == b || a.starts_with(&b) || b.starts_with(&a)
+}
+
+/// Never allow a misconfigured path to turn "clean recordings" into a wipe of
+/// the filesystem or of the application directory itself.
+fn is_safe_clean_root(root: &Path) -> bool {
+    let r = canonical_lossy(root);
+    if r.as_os_str().is_empty() || r.parent().is_none() {
+        return false;
+    }
+    let lowered = r.to_string_lossy().to_ascii_lowercase();
+    let unsafe_roots = [
+        "/", "/tmp", "/var", "/etc", "/home", "/root", "/sdcard", "/storage", "/proc",
+        "/sys", "/dev",
+    ];
+    if unsafe_roots.iter().any(|u| lowered == *u) {
+        return false;
+    }
+    let exe = canonical_lossy(&AppState::exe_dir());
+    if r == exe || exe.starts_with(&r) {
+        return false;
+    }
+    true
+}
+
+/// Recursively sum file sizes without following symlinks.
+fn path_size(path: &Path) -> u64 {
+    let Ok(meta) = fs::symlink_metadata(path) else {
+        return 0;
+    };
+    if meta.file_type().is_symlink() {
+        return meta.len();
+    }
+    if meta.is_dir() {
+        let Ok(entries) = fs::read_dir(path) else {
+            return 0;
+        };
+        return entries.flatten().map(|e| path_size(&e.path())).sum();
+    }
+    meta.len()
+}
+
+/// Remove a file, symlink, or directory. Symlinks are removed as files so a
+/// symlink pointing outside the recording roots can never be followed.
+fn remove_entry(path: &Path) -> std::io::Result<()> {
+    let meta = fs::symlink_metadata(path)?;
+    if meta.is_dir() && !meta.file_type().is_symlink() {
+        return fs::remove_dir_all(path);
+    }
+    let mut last_err = None;
+    for _ in 0..10 {
+        match fs::remove_file(path) {
+            Ok(()) => return Ok(()),
+            Err(e) => {
+                last_err = Some(e);
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+        }
+    }
+    Err(last_err.unwrap_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "failed to remove file after retries",
+        )
+    }))
+}
+
+/// Delete every finished recording, segment directory, sidecar, and module
+/// temporary file under the configured roots. Active recordings, merge queues,
+/// post-processing jobs, and Telegram uploads are preserved.
+pub fn clean_all_inner(
+    recorder: &Arc<RecorderManager>,
+    state: &Arc<AppState>,
+) -> std::io::Result<CleanReport> {
+    let settings = state.get_settings();
+
+    // Paths that must survive this cleanup.
+    let mut protected: Vec<PathBuf> = Vec::new();
+    for (dir, _) in recorder.get_active_sessions() {
+        protected.push(dir);
+    }
+    {
+        let merging = recorder.merging_dirs.read();
+        let waiting = recorder.waiting_merge_dirs.read();
+        protected.extend(merging.iter().cloned());
+        protected.extend(waiting.iter().cloned());
+    }
+    {
+        let tasks = state.pp_tasks.read();
+        for (path, task) in tasks.iter() {
+            if task.status == "running" || task.status == "waiting" {
+                protected.push(PathBuf::from(path));
+            }
+        }
+    }
+    {
+        let tasks = state.tg_tasks.read();
+        for (path, task) in tasks.iter() {
+            if task.status == "running" {
+                protected.push(PathBuf::from(path));
+            }
+        }
+    }
+
+    let protected_keys: HashSet<String> = protected
+        .iter()
+        .map(|p| p.to_string_lossy().to_string())
+        .collect();
+    let is_protected = |path: &Path| {
+        protected
+            .iter()
+            .any(|p| paths_conflict(path, p))
+    };
+
+    // Ask in-flight jobs that are NOT protected to stop before their files are
+    // removed. Protected jobs keep running and their files stay on disk.
+    let pp_to_cancel: Vec<String> = state
+        .pp_tasks
+        .read()
+        .keys()
+        .filter(|key| !is_protected(Path::new(key.as_str())))
+        .cloned()
+        .collect();
+    for key in pp_to_cancel {
+        state.pp_task_cancel(&key);
+    }
+    let tg_to_cancel: Vec<String> = state
+        .tg_tasks
+        .read()
+        .keys()
+        .filter(|key| !is_protected(Path::new(key.as_str())))
+        .cloned()
+        .collect();
+    for key in tg_to_cancel {
+        state.tg_task_cancel(&key);
+    }
+
+    let mut roots = vec![
+        PathBuf::from(&settings.output_dir),
+        settings.videos_root(),
+        AppState::exe_dir().join("tmp"),
+    ];
+    let mut seen = HashSet::new();
+    roots.retain(|root| root.exists() && seen.insert(canonical_lossy(root)));
+
+    let mut report = CleanReport {
+        removed: 0,
+        freed_bytes: 0,
+        skipped: 0,
+    };
+
+    for root in roots {
+        if !is_safe_clean_root(&root) {
+            report.skipped += 1;
+            continue;
+        }
+        let canonical_root = canonical_lossy(&root);
+        let Ok(entries) = fs::read_dir(&root) else {
+            report.skipped += 1;
+            continue;
+        };
+        for entry in entries.flatten() {
+            let child = entry.path();
+            let canonical_child = canonical_lossy(&child);
+            // Reject the root itself and anything that resolves outside it
+            // (for example a symlink to another disk).
+            if canonical_child == canonical_root || !canonical_child.starts_with(&canonical_root) {
+                report.skipped += 1;
+                continue;
+            }
+            if is_protected(&child) {
+                report.skipped += 1;
+                continue;
+            }
+            let size = path_size(&child);
+            match remove_entry(&child) {
+                Ok(()) => {
+                    report.removed += 1;
+                    report.freed_bytes += size;
+                }
+                Err(_) => report.skipped += 1,
+            }
+        }
+    }
+
+    // Drop stale task/result bookkeeping for everything we just deleted, while
+    // keeping records for active files that were deliberately preserved.
+    {
+        let mut data = state.data.write();
+        let before = data.pp_results.len();
+        data.pp_results.retain(|stored| {
+            let path = Path::new(stored.as_str());
+            path.exists() || is_protected(path)
+        });
+        if data.pp_results.len() != before {
+            drop(data);
+            let _ = state.save();
+        }
+    }
+    state
+        .pp_tasks
+        .write()
+        .retain(|key, _| protected_keys.contains(key));
+    state
+        .pp_cancel_flags
+        .write()
+        .retain(|key, _| protected_keys.contains(key));
+    state
+        .tg_tasks
+        .write()
+        .retain(|key, _| protected_keys.contains(key));
+    state
+        .tg_cancel_flags
+        .write()
+        .retain(|key, _| protected_keys.contains(key));
+
+    Ok(report)
+}
+
 /// 从文件名 stem（格式：`{name}_{YYYYMMDD}_{HHmmss}`）中解析录制开始时间。
 /// Parse the recording start time from a filename stem (format: `{name}_{YYYYMMDD}_{HHmmss}`).
 pub fn parse_timestamp_from_stem_pub(stem: &str) -> Option<String> {
@@ -294,4 +543,41 @@ pub fn parse_timestamp_from_stem_pub(stem: &str) -> Option<String> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn paths_conflict_covers_ancestors_and_descendants() {
+        let session = Path::new("/recordings/alice/alice_20260101_120000");
+        assert!(paths_conflict(
+            Path::new("/recordings/alice"),
+            session
+        ));
+        assert!(paths_conflict(
+            session,
+            Path::new("/recordings/alice/alice_20260101_120000/seg000.ts")
+        ));
+        assert!(!paths_conflict(
+            Path::new("/recordings/bob"),
+            session
+        ));
+    }
+
+    #[test]
+    fn is_within_rejects_root_and_parent() {
+        let root = Path::new("/recordings");
+        assert!(is_within(Path::new("/recordings/alice"), root));
+        assert!(!is_within(root, root));
+        assert!(!is_within(Path::new("/other"), root));
+    }
+
+    #[test]
+    fn safe_clean_root_rejects_system_roots() {
+        assert!(!is_safe_clean_root(Path::new("/")));
+        assert!(!is_safe_clean_root(Path::new("/tmp")));
+        assert!(is_safe_clean_root(Path::new("/srv/app/recordings")));
+    }
 }

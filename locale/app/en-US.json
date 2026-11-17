@@ -111,6 +111,8 @@
     },
     "batchPostprocess": "Batch Post-process ({count})",
     "deleteSelected": "Delete Selected ({count})",
+    "cleanAll": "Clean Everything",
+    "cleanAllShort": "Clean All",
     "openDir": "Open Directory",
     "loading": "Loading...",
     "empty": "No recordings yet",
@@ -157,6 +159,12 @@
       "batchMessage": "Are you sure you want to delete {count} selected file(s)? This cannot be undone.",
       "batchDone": "Deleted {count} file(s)",
       "batchFailed": "Done, {count} file(s) failed"
+    },
+    "cleanAllDialog": {
+      "title": "Clean Everything",
+      "message": "Delete all finished recordings, segment folders, sidecars, and temporary files? Files currently recording, merging, post-processing, or uploading are kept. This cannot be undone.",
+      "confirm": "Clean Everything",
+      "done": "Removed {count} item(s), freed {size}; skipped {skipped} in-use item(s)"
     },
     "otherClientDeleted": "Another client deleted recording: {name}",
     "segments": {

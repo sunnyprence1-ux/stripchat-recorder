@@ -115,6 +115,8 @@ export default {
 		postprocessAllShort: "Post All ({count})",
 		deleteAllVideos: "Delete All Videos ({count})",
 		deleteAllShort: "Delete All ({count})",
+		cleanAll: "Clean Everything",
+		cleanAllShort: "Clean All",
 		openDir: "Open Directory",
 		loading: "Loading...",
 		empty: "No recordings yet",
@@ -176,6 +178,13 @@ export default {
 			confirm: "Delete All",
 			done: "Deleted {count} file(s)",
 			failed: "Done, {count} file(s) failed",
+		},
+		cleanAllDialog: {
+			title: "Clean Everything",
+			message:
+				"Delete all finished recordings, segment folders, sidecars, and temporary files? Files currently recording, merging, post-processing, or uploading are kept. This cannot be undone.",
+			confirm: "Clean Everything",
+			done: "Removed {count} item(s), freed {size}; skipped {skipped} in-use item(s)",
 		},
 		otherClientDeleted: "Another client deleted recording: {name}",
 	},

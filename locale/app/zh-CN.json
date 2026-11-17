@@ -111,6 +111,8 @@
     },
     "batchPostprocess": "批量后处理 ({count})",
     "deleteSelected": "删除选中 ({count})",
+    "cleanAll": "清理全部",
+    "cleanAllShort": "全部清理",
     "openDir": "打开目录",
     "loading": "加载中...",
     "empty": "暂无录制文件",
@@ -157,6 +159,12 @@
       "batchMessage": "确定要删除选中的 {count} 个文件吗？此操作不可撤销。",
       "batchDone": "已删除 {count} 个文件",
       "batchFailed": "删除完成，{count} 个文件失败"
+    },
+    "cleanAllDialog": {
+      "title": "清理全部",
+      "message": "确定删除所有已完成的录制文件、分片目录、附属文件和临时文件吗？正在录制、合并、后处理或上传的文件会保留，此操作不可撤销。",
+      "confirm": "全部清理",
+      "done": "已清理 {count} 项，释放 {size}；跳过 {skipped} 个正在使用的项目"
     },
     "otherClientDeleted": "其他客户端删除了录制文件：{name}",
     "segments": {

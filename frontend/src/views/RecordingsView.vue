@@ -70,6 +70,8 @@
 	 * it is cleared after postprocess-done is handled, so the failure toast is correctly suppressed.
 	 */
 	const ppCancelledByDelete = new Set<string>();
+	/** 正在一键清理 / Clean-everything request in flight */
+	const cleaningAll = ref(false);
 
 	/** 磁盘空间信息 / Disk space information */
 	interface DiskSpace {
@@ -445,6 +447,55 @@
 				t("recordings.deleteAllDialog.done", { count: paths.length }),
 				"success",
 			);
+	}
+
+	/**
+	 * 一键清理录制目录和临时文件。
+	 * 后端会保留正在录制、合并、后处理和上传中的文件。
+	 * Clean all finished recordings and temp files; the backend preserves in-use files.
+	 */
+	async function cleanEverything() {
+		if (cleaningAll.value) return;
+		const ok = await confirm({
+			title: t("recordings.cleanAllDialog.title"),
+			message: t("recordings.cleanAllDialog.message", { count: files.value.length }),
+			confirmText: t("recordings.cleanAllDialog.confirm"),
+			danger: true,
+		});
+		if (!ok) return;
+
+		cleaningAll.value = true;
+		try {
+			const result = await call<{
+				ok: boolean;
+				report: { removed: number; freed_bytes: number; skipped: number };
+			}>("clean_everything");
+
+			const removedPaths = files.value.map((f) => f.path);
+			for (const path of removedPaths) {
+				localDeletedPaths.add(path);
+				ppCancelledByDelete.add(path);
+				ppRemoveFile(path);
+				delete elapsed.value[path];
+			}
+			files.value = [];
+			selected.value.clear();
+
+			await load();
+			await refreshDiskSpace();
+			toast(
+				t("recordings.cleanAllDialog.done", {
+					count: result.report.removed,
+					size: formatSize(result.report.freed_bytes),
+					skipped: result.report.skipped,
+				}),
+				"success",
+			);
+		} catch (e) {
+			toast(String(e), "error");
+		} finally {
+			cleaningAll.value = false;
+		}
 	}
 
 	/** 所有正在录制文件的总录制速度（字节/秒）/ Total recording speed (bytes/second) */
@@ -885,101 +936,123 @@
 				</div>
 			</div>
 			<!-- 桌面端全局与批量操作；移动端改用工具栏和底部固定操作栏 / Desktop global and batch actions; mobile uses toolbar and bottom bar -->
-			<div v-if="files.length > 0" class="hidden md:flex gap-2 shrink-0">
-				<Button
-					variant="outline"
-					size="sm"
-					:disabled="ppAllPaths.length === 0"
-					@click="postProcessAll"
-				>
-					{{ t("recordings.postprocessAll", { count: ppAllPaths.length }) }}
-				</Button>
+			<div class="hidden md:flex gap-2 shrink-0 items-start">
 				<Button
 					variant="destructive"
-					size="sm"
-					:disabled="deleteAllPaths.length === 0"
-					@click="deleteAllVideos"
-				>
-					{{ t("recordings.deleteAllVideos", { count: deleteAllPaths.length }) }}
-				</Button>
-				<Button
-					v-if="selectedCount > 0"
-					variant="outline"
-					size="sm"
-					:disabled="ppSelectableCount === 0"
-					@click="postProcessSelected"
-				>
-					{{ t("recordings.batchPostprocess", { count: ppSelectableCount }) }}
-				</Button>
-				<Button
-					v-if="selectedCount > 0"
-					variant="outline"
 					size="sm"
 					class="gap-1.5"
-					:disabled="tgSelectablePaths.length === 0"
-					@click="sendSelectedToTelegram"
+					:disabled="cleaningAll"
+					@click="cleanEverything"
 				>
-					<Send class="size-3.5" />
-					{{ t("telegram.sendSelected", { count: tgSelectablePaths.length }) }}
+					<Loader2 v-if="cleaningAll" class="size-3.5 animate-spin" />
+					{{ t("recordings.cleanAll") }}
 				</Button>
-				<Button
-					v-if="selectedCount > 0"
-					variant="destructive"
-					size="sm"
-					@click="deleteSelected"
-				>
-					{{ t("recordings.deleteSelected", { count: selectedCount }) }}
-				</Button>
+				<div v-if="files.length > 0" class="flex gap-2">
+					<Button
+						variant="outline"
+						size="sm"
+						:disabled="cleaningAll || ppAllPaths.length === 0"
+						@click="postProcessAll"
+					>
+						{{ t("recordings.postprocessAll", { count: ppAllPaths.length }) }}
+					</Button>
+					<Button
+						variant="destructive"
+						size="sm"
+						:disabled="cleaningAll || deleteAllPaths.length === 0"
+						@click="deleteAllVideos"
+					>
+						{{ t("recordings.deleteAllVideos", { count: deleteAllPaths.length }) }}
+					</Button>
+					<Button
+						v-if="selectedCount > 0"
+						variant="outline"
+						size="sm"
+						:disabled="cleaningAll || ppSelectableCount === 0"
+						@click="postProcessSelected"
+					>
+						{{ t("recordings.batchPostprocess", { count: ppSelectableCount }) }}
+					</Button>
+					<Button
+						v-if="selectedCount > 0"
+						variant="outline"
+						size="sm"
+						class="gap-1.5"
+						:disabled="cleaningAll || tgSelectablePaths.length === 0"
+						@click="sendSelectedToTelegram"
+					>
+						<Send class="size-3.5" />
+						{{ t("telegram.sendSelected", { count: tgSelectablePaths.length }) }}
+					</Button>
+					<Button
+						v-if="selectedCount > 0"
+						variant="destructive"
+						size="sm"
+						:disabled="cleaningAll"
+						@click="deleteSelected"
+					>
+						{{ t("recordings.deleteSelected", { count: selectedCount }) }}
+					</Button>
+				</div>
 			</div>
 		</header>
 
 		<!-- 移动端工具栏：全选 + 排序（表头在移动端隐藏）/ Mobile toolbar: select all + sorting (header hidden on mobile) -->
-		<div
-			v-if="files.length > 0"
-			class="md:hidden flex flex-wrap items-center gap-x-2 gap-y-1 pb-3"
-		>
-			<!-- label 包裹复选框：整块可点，高度 44px / Label wraps the checkbox: whole block tappable, 44px tall -->
-			<label
-				class="flex items-center gap-2 shrink-0 min-h-11 pr-2 cursor-pointer select-none"
-			>
-				<Checkbox
-					:model-value="getAllChecked()"
-					class="size-5"
-					@update:model-value="setAllChecked"
-				/>
-				<span class="text-xs text-muted-foreground">{{
-					t("recordings.selectAll")
-				}}</span>
-			</label>
-			<Button
-				v-for="col in sortableColumns"
-				:key="col.key"
-				variant="outline"
-				size="sm"
-				class="shrink-0 gap-1 text-xs px-2"
-				@click="toggleSort(col.key)"
-			>
-				{{ t(col.labelKey) }}
-				<component :is="sortIcon(col.key)" class="size-3.5" />
-			</Button>
-			<Button
-				variant="outline"
-				size="sm"
-				class="shrink-0 text-xs px-2"
-				:disabled="ppAllPaths.length === 0"
-				@click="postProcessAll"
-			>
-				{{ t("recordings.postprocessAllShort", { count: ppAllPaths.length }) }}
-			</Button>
+		<div class="md:hidden flex flex-wrap items-center gap-x-2 gap-y-1 pb-3">
 			<Button
 				variant="destructive"
 				size="sm"
-				class="shrink-0 text-xs px-2"
-				:disabled="deleteAllPaths.length === 0"
-				@click="deleteAllVideos"
+				class="shrink-0 text-xs px-2 gap-1"
+				:disabled="cleaningAll"
+				@click="cleanEverything"
 			>
-				{{ t("recordings.deleteAllShort", { count: deleteAllPaths.length }) }}
+				<Loader2 v-if="cleaningAll" class="size-3.5 animate-spin" />
+				{{ t("recordings.cleanAllShort") }}
 			</Button>
+			<template v-if="files.length > 0">
+				<!-- label 包裹复选框：整块可点，高度 44px / Label wraps the checkbox: whole block tappable, 44px tall -->
+				<label
+					class="flex items-center gap-2 shrink-0 min-h-11 pr-2 cursor-pointer select-none"
+				>
+					<Checkbox
+						:model-value="getAllChecked()"
+						class="size-5"
+						@update:model-value="setAllChecked"
+					/>
+					<span class="text-xs text-muted-foreground">{{
+						t("recordings.selectAll")
+					}}</span>
+				</label>
+				<Button
+					v-for="col in sortableColumns"
+					:key="col.key"
+					variant="outline"
+					size="sm"
+					class="shrink-0 gap-1 text-xs px-2"
+					@click="toggleSort(col.key)"
+				>
+					{{ t(col.labelKey) }}
+					<component :is="sortIcon(col.key)" class="size-3.5" />
+				</Button>
+				<Button
+					variant="outline"
+					size="sm"
+					class="shrink-0 text-xs px-2"
+					:disabled="cleaningAll || ppAllPaths.length === 0"
+					@click="postProcessAll"
+				>
+					{{ t("recordings.postprocessAllShort", { count: ppAllPaths.length }) }}
+				</Button>
+				<Button
+					variant="destructive"
+					size="sm"
+					class="shrink-0 text-xs px-2"
+					:disabled="cleaningAll || deleteAllPaths.length === 0"
+					@click="deleteAllVideos"
+				>
+					{{ t("recordings.deleteAllShort", { count: deleteAllPaths.length }) }}
+				</Button>
+			</template>
 		</div>
 
 		<!-- 移动端批量操作栏（选中文件时出现，位于底部标签栏之上）
