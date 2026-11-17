@@ -1,0 +1,782 @@
+//! Stripchat API 客户端 / Stripchat API Client
+//!
+//! 封装对 Stripchat 前端 API 的访问，包括：
+//! - 获取主播直播状态和播放列表 URL
+//! - 下载 HLS 分片（支持多 CDN 竞速）
+//! - 解析 Mouflon 加密的播放列表
+//!
+//! Wraps access to the Stripchat frontend API, including:
+//! - Fetching streamer live status and playlist URLs
+//! - Downloading HLS segments (with multi-CDN racing)
+//! - Parsing Mouflon-encrypted playlists
+
+use crate::core::error::{AppError, Result};
+use crate::streaming::doh::DohResolver;
+use reqwest::{Client, Response};
+use std::collections::HashMap;
+use std::sync::Arc;
+use wreq_util::Profile;
+
+/// 模拟浏览器的 User-Agent / Browser-mimicking User-Agent
+const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36";
+/// 请求 Referer 头 / Request Referer header
+const REFERER: &str = "https://stripchat.com/";
+
+/// 支持的 CDN 顶级域名列表（用于多 CDN 竞速）/ Supported CDN TLDs (for multi-CDN racing)
+const CDN_TLDS: &[&str] = &[
+    "doppiocdn.com",
+    "doppiocdn.org",
+    "doppiocdn.live",
+    "doppiocdn.net",
+];
+
+/// 构建用于 CDN 分片下载的 HTTP 客户端（支持代理，启用 TCP keepalive）。
+/// Build an HTTP client for CDN segment downloads (supports proxy, enables TCP keepalive).
+fn build_client(proxy_url: Option<&str>) -> Result<Client> {
+    let mut builder = Client::builder()
+        .user_agent(USER_AGENT)
+        .timeout(std::time::Duration::from_secs(30))
+        .tcp_keepalive(std::time::Duration::from_secs(15))
+        .connection_verbose(false);
+
+    if let Some(proxy) = proxy_url
+        && !proxy.is_empty()
+    {
+        builder =
+            builder.proxy(reqwest::Proxy::all(proxy).map_err(|e| AppError::Other(e.to_string()))?);
+    } else {
+        builder = builder.no_proxy();
+    }
+
+    Ok(builder.build()?)
+}
+
+/// 构建用于 API 请求的 HTTP 客户端（支持代理）。
+///
+/// Cloudflare 会按 TLS / HTTP2 指纹（JA3/JA4 + HTTP2 SETTINGS）判定请求来源，
+/// 普通 HTTP 客户端即使带上完整的浏览器请求头也会被返回 403。
+/// 这里使用 wreq 的浏览器指纹模拟（BoringSSL + 浏览器 TLS/HTTP2 参数）通过校验，
+/// 并用 DoH 解析域名，避开被运营商污染的本地 DNS。
+///
+/// Build an HTTP client for API requests (supports proxy).
+///
+/// Cloudflare fingerprints TLS/HTTP2 handshakes (JA3/JA4 + HTTP2 SETTINGS); a plain HTTP client
+/// gets a 403 even with a complete set of browser headers. This uses wreq's browser emulation
+/// (BoringSSL with browser TLS/HTTP2 parameters) to pass that check, and resolves hostnames
+/// through DoH so a poisoned local resolver cannot break the connection.
+fn build_api_client(proxy_url: Option<&str>) -> Result<wreq::Client> {
+    let mut builder = wreq::Client::builder()
+        .emulation(Profile::Chrome136)
+        .timeout(std::time::Duration::from_secs(30));
+
+    if let Some(proxy) = proxy_url
+        && !proxy.is_empty()
+    {
+        // 使用代理时由代理负责域名解析，无需 DoH / The proxy resolves names itself, so DoH is unnecessary
+        builder = builder
+            .proxy(wreq::Proxy::all(proxy).map_err(|e| AppError::Other(e.to_string()))?);
+    } else {
+        // 未配置代理时不读取环境变量里的代理 / Do not pick up proxy env vars when none is configured
+        builder = builder.no_proxy().dns_resolver(DohResolver::new());
+    }
+
+    Ok(builder.build()?)
+}
+
+/// 把 API 的非 2xx 状态码转换为带排查建议的错误。
+/// Convert a non-2xx API status into an error that carries troubleshooting advice.
+fn api_status_error(status: u16, username: &str) -> AppError {
+    match status {
+        403 | 429 => AppError::Other(format!(
+            "API 返回 {status} ({username})：请求被 Cloudflare 拦截。\
+             当前网络可能被站点限制，请在设置中配置 API 代理后重试 / \
+             Blocked by Cloudflare; configure an API proxy in Settings and retry"
+        )),
+        451 => AppError::Other(format!(
+            "API 返回 451 ({username})：该地区无法访问该站点，请配置代理 / \
+             Not available in this region, configure a proxy"
+        )),
+        _ => AppError::Other(format!("API 返回 {status} ({username})")),
+    }
+}
+
+/// 主播直播状态信息 / Streamer live status information
+#[derive(Debug, Clone)]
+pub struct StreamInfo {
+    /// 是否在线 / Whether online
+    pub is_online: bool,
+    /// 是否可录制（公开秀状态）/ Whether recordable (public show status)
+    #[allow(dead_code)]
+    pub is_recordable: bool,
+    /// 观看人数 / Viewer count
+    pub viewers: i64,
+    /// 直播间状态文字（中文）/ Stream status text (Chinese)
+    pub status: String,
+    /// 缩略图 URL / Thumbnail URL
+    pub thumbnail_url: Option<String>,
+    /// HLS 播放列表 URL（仅在 fetch_playlist=true 且可录制时有值）/ HLS playlist URL (only when fetch_playlist=true and recordable)
+    pub playlist_url: Option<String>,
+}
+
+/// Stripchat API 客户端，封装 API 请求和 CDN 分片下载。
+/// Stripchat API client wrapping API requests and CDN segment downloads.
+#[derive(Clone)]
+pub struct StripchatApi {
+    /// API 请求客户端（浏览器 TLS 指纹 + DoH 解析）/ API request client (browser TLS fingerprint + DoH resolution)
+    api_client: wreq::Client,
+    /// CDN 分片下载客户端 / CDN segment download client
+    cdn_client: Client,
+    /// 可选的镜像站域名 / Optional mirror site domain
+    sc_mirror: Option<String>,
+    /// 各 CDN 节点的首选 TLD 缓存（节点 ID -> TLD）/ Preferred TLD cache per CDN node (node ID -> TLD)
+    preferred_tld_by_node: Arc<parking_lot::Mutex<std::collections::HashMap<String, String>>>,
+    /// Mouflon 解密密钥（pkey -> pdkey），用于 playlist URL 匹配 / Mouflon decryption keys (pkey -> pdkey) for playlist URL matching
+    mouflon_keys: HashMap<String, String>,
+    /// 首选分辨率高度（0 = 原始/最高画质）/ Preferred resolution height (0 = original/highest quality)
+    preferred_resolution: u32,
+    /// 首选分辨率缺失时是否优先向上选择 / Whether to prefer a higher resolution when the target is unavailable
+    prefers_higher_resolution: bool,
+}
+
+impl StripchatApi {
+    /// 创建完整的 API 客户端（API + CDN，带 CDN TLD 缓存）。
+    /// Create a full API client (API + CDN, with CDN TLD cache).
+    pub fn new(
+        api_proxy: Option<&str>,
+        cdn_proxy: Option<&str>,
+        sc_mirror: Option<&str>,
+        preferred_tld_by_node: Arc<parking_lot::Mutex<std::collections::HashMap<String, String>>>,
+    ) -> Result<Self> {
+        Ok(Self {
+            api_client: build_api_client(api_proxy)?,
+            cdn_client: build_client(cdn_proxy)?,
+            sc_mirror: sc_mirror.filter(|s| !s.is_empty()).map(|s| s.to_string()),
+            preferred_tld_by_node,
+            mouflon_keys: HashMap::new(),
+            preferred_resolution: 0,
+            prefers_higher_resolution: false,
+        })
+    }
+
+    /// 创建仅用于 API 请求的客户端（不需要 CDN TLD 缓存，适用于验证用户名等场景）。
+    /// Create an API-only client (no CDN TLD cache, suitable for username verification, etc.).
+    pub fn new_api_only(
+        api_proxy: Option<&str>,
+        cdn_proxy: Option<&str>,
+        sc_mirror: Option<&str>,
+    ) -> Result<Self> {
+        Self::new(
+            api_proxy,
+            cdn_proxy,
+            sc_mirror,
+            Arc::new(parking_lot::Mutex::new(std::collections::HashMap::new())),
+        )
+    }
+
+    /// 设置 Mouflon 解密密钥，返回 self 以支持链式调用。
+    /// Set Mouflon decryption keys, returns self for method chaining.
+    pub fn with_mouflon_keys(mut self, keys: HashMap<String, String>) -> Self {
+        self.mouflon_keys = keys;
+        self
+    }
+
+    /// 设置首选分辨率和回退方向，返回 self 以支持链式调用。
+    /// Set the preferred resolution and fallback direction, returning self for method chaining.
+    pub fn with_resolution_selection(
+        mut self,
+        preferred_resolution: u32,
+        resolution_preference: &str,
+    ) -> Self {
+        self.preferred_resolution = preferred_resolution;
+        self.prefers_higher_resolution = resolution_preference == "higher";
+        self
+    }
+
+    /// 获取当前 Mouflon 解密密钥的引用。
+    /// Get a reference to the current Mouflon decryption keys.
+    pub fn mouflon_keys(&self) -> &HashMap<String, String> {
+        &self.mouflon_keys
+    }
+
+    /// 获取当前首选分辨率。/ Get the current preferred resolution.
+    pub fn preferred_resolution(&self) -> u32 {
+        self.preferred_resolution
+    }
+
+    /// 返回是否优先选择更高分辨率。/ Return whether higher resolutions are preferred.
+    pub fn prefers_higher_resolution(&self) -> bool {
+        self.prefers_higher_resolution
+    }
+
+    /// 将 stripchat.com 域名替换为镜像站域名（若已配置）。
+    /// Replace the stripchat.com domain with the mirror site domain (if configured).
+    fn api_url(&self, url: &str) -> String {
+        match &self.sc_mirror {
+            Some(mirror) => url.replace("stripchat.com", mirror),
+            None => url.to_string(),
+        }
+    }
+
+    /// 返回适配镜像站的 Referer 头值。
+    /// Return the Referer header value adapted for the mirror site.
+    fn referer(&self) -> String {
+        match &self.sc_mirror {
+            Some(mirror) => REFERER.replace("stripchat.com", mirror),
+            None => REFERER.to_string(),
+        }
+    }
+
+    /// 从 CDN URL 中提取节点 ID（URL 主机名的第一段）。
+    /// Extract the node ID from a CDN URL (first segment of the hostname).
+    fn extract_node_id(url: &str) -> Option<&str> {
+        let without_scheme = url.strip_prefix("https://")?;
+        let host = without_scheme.split('/').next()?;
+        host.split('.').next()
+    }
+
+    /// 对 CDN URL 进行多 TLD 竞速请求，返回最先成功响应的结果。
+    /// 同时更新节点的首选 TLD 缓存，加速后续请求。
+    ///
+    /// Race a CDN URL across multiple TLDs and return the first successful response.
+    /// Also updates the preferred TLD cache for the node to speed up subsequent requests.
+    async fn cdn_get(&self, url: &str) -> Result<Response> {
+        let src_tld = match CDN_TLDS.iter().find(|&&tld| url.contains(tld)) {
+            Some(&tld) => tld,
+            None => {
+                return Ok(self
+                    .cdn_client
+                    .get(url)
+                    .header("Referer", REFERER)
+                    .send()
+                    .await?);
+            }
+        };
+
+        let node_id = Self::extract_node_id(url).unwrap_or("unknown").to_string();
+
+        // 优先使用当前节点已验证可用的首选 TLD，避免每次请求都触发多 TLD 竞速导致跨边缘节点不同步与连接浪费
+        // Prioritize cached preferred TLD for this node to avoid multi-TLD churn and out-of-sync edge snapshots
+        let cached_tld = self.preferred_tld_by_node.lock().get(&node_id).cloned();
+        if let Some(cached_tld) = cached_tld {
+            let direct_url = url.replace(src_tld, &cached_tld);
+            if let Ok(resp) = self
+                .cdn_client
+                .get(&direct_url)
+                .header("Referer", REFERER)
+                .send()
+                .await
+            {
+                if resp.status().is_success() {
+                    return Ok(resp);
+                }
+            }
+            // 缓存节点不可用时清理，回退到多 TLD 竞速重新选路
+            self.preferred_tld_by_node.lock().remove(&node_id);
+        }
+
+        let client = &self.cdn_client;
+        let mut tasks = tokio::task::JoinSet::new();
+
+        for &tld in CDN_TLDS {
+            let candidate = url.replace(src_tld, tld);
+            let client = client.clone();
+            let tld = tld.to_string();
+            tasks.spawn(async move {
+                let resp = client
+                    .get(&candidate)
+                    .header("Referer", REFERER)
+                    .send()
+                    .await;
+                (tld, resp)
+            });
+        }
+
+        let mut errors: Vec<(String, String)> = Vec::new();
+
+        while let Some(join_result) = tasks.join_next().await {
+            let (tld, result) = match join_result {
+                Ok(r) => r,
+                Err(_) => continue,
+            };
+            match result {
+                Ok(resp) if resp.status().is_success() => {
+                    tasks.abort_all();
+                    let preferred = self.preferred_tld_by_node.lock().get(&node_id).cloned();
+                    if preferred.as_deref() != Some(tld.as_str()) {
+                        tracing::debug!(
+                            "CDN [{}] {} -> {}",
+                            node_id,
+                            preferred.as_deref().unwrap_or(src_tld),
+                            tld
+                        );
+                        self.preferred_tld_by_node.lock().insert(node_id, tld);
+                    }
+                    return Ok(resp);
+                }
+                Ok(resp) => {
+                    errors.push((tld, format!("HTTP {}", resp.status())));
+                }
+                Err(e) => {
+                    errors.push((tld, e.to_string()));
+                }
+            }
+        }
+
+        for (tld, err) in &errors {
+            tracing::error!("CDN [{}] {}", tld, err);
+        }
+        Err(AppError::Other(format!("All CDN TLDs failed → {}", url)))
+    }
+
+    /// 带重试的 API GET。
+    ///
+    /// Cloudflare 偶尔会对个别请求返回 403 / 429（同一客户端下一次请求通常就能通过），
+    /// 直接失败会让「添加主播」随机报错，因此这里做少量退避重试。
+    ///
+    /// API GET with retries.
+    ///
+    /// Cloudflare occasionally answers an individual request with 403 / 429 even though the very
+    /// next request from the same client passes. Failing immediately makes "add streamer" fail at
+    /// random, so a few backed-off retries are performed first.
+    async fn api_get(&self, url: &str, referer: &str) -> Result<wreq::Response> {
+        const MAX_ATTEMPTS: u32 = 3;
+        let mut attempt = 1;
+        loop {
+            let resp = self
+                .api_client
+                .get(url)
+                .header("Referer", referer)
+                .send()
+                .await?;
+            let status = resp.status().as_u16();
+            if (status != 403 && status != 429) || attempt >= MAX_ATTEMPTS {
+                return Ok(resp);
+            }
+            tracing::warn!("API {status} for {url}, retrying ({attempt}/{MAX_ATTEMPTS})");
+            tokio::time::sleep(std::time::Duration::from_millis(400 * attempt as u64)).await;
+            attempt += 1;
+        }
+    }
+
+    /// 查询主播是否处于群组秀状态，并返回群组秀类型（ticket / perMinute）。
+    /// Query whether a streamer is in a group show and return the group show type (ticket / perMinute).
+    async fn get_group_show_type(&self, username: &str) -> Option<String> {
+        const LIMIT: usize = 60;
+        let mut offset = 0usize;
+        loop {
+            let url = self.api_url(&format!(
+                "https://stripchat.com/api/front/models?removeShows=false&recInFeatured=false&limit={}&offset={}&primaryTag=girls&filterGroupTags=[[\"groupShow\"]]",
+                LIMIT, offset
+            ));
+            let Ok(resp) = self.api_get(&url, &self.referer()).await else {
+                return None;
+            };
+            let Ok(json) = resp.json::<serde_json::Value>().await else {
+                return None;
+            };
+            let models = json["models"].as_array()?;
+            for m in models.iter() {
+                if m["username"].as_str() == Some(username) {
+                    return m["groupShowType"].as_str().map(|s| s.to_string());
+                }
+            }
+            if models.len() < LIMIT {
+                return None;
+            }
+            offset += LIMIT;
+        }
+    }
+
+    /// 获取主播的直播状态信息。
+    ///
+    /// # 参数 / Parameters
+    /// - `username`: 主播用户名 / Streamer username
+    /// - `fetch_playlist`: 是否同时获取 HLS 播放列表 URL（仅在可录制时有效）/ Whether to also fetch the HLS playlist URL (only effective when recordable)
+    pub async fn get_stream_info(
+        &self,
+        username: &str,
+        fetch_playlist: bool,
+    ) -> Result<StreamInfo> {
+        // 第一步：请求 broadcasts 接口，取 item.streamName 作为 model_id
+        // Step 1: Request the broadcasts endpoint and take item.streamName as model_id
+        let broadcasts_url = self.api_url(&format!(
+            "https://stripchat.com/api/front/v1/broadcasts/{}",
+            username
+        ));
+
+        let referer = format!("{}{}", self.referer(), username);
+        let broadcasts_resp = self.api_get(&broadcasts_url, &referer).await?;
+
+        if !broadcasts_resp.status().is_success() {
+            if broadcasts_resp.status().as_u16() == 404 {
+                return Err(AppError::UserNotFound(format!("用户 {} 不存在", username)));
+            }
+            return Err(api_status_error(broadcasts_resp.status().as_u16(), username));
+        }
+
+        let broadcasts_json: serde_json::Value = broadcasts_resp.json().await?;
+        let model_id = broadcasts_json["item"]["streamName"]
+            .as_str()
+            .ok_or_else(|| AppError::Other(format!("无法获取 {} 的 streamName", username)))?
+            .to_string();
+
+        // 第二步：使用 model_id 请求 cam 接口，获取直播状态详情
+        // Step 2: Request the cam endpoint with model_id to get live status details
+        let url = self.api_url(&format!(
+            "https://stripchat.com/api/front/v2/models/{}/cam",
+            model_id
+        ));
+
+        let resp = self.api_get(&url, &referer).await?;
+
+        if !resp.status().is_success() {
+            if resp.status().as_u16() == 404 {
+                return Err(AppError::UserNotFound(format!("用户 {} 不存在", username)));
+            }
+            return Err(api_status_error(resp.status().as_u16(), username));
+        }
+
+        let json: serde_json::Value = resp.json().await?;
+        let user = &json["user"]["user"];
+        let cam = &json["cam"];
+
+        let is_live = user["isLive"].as_bool().unwrap_or(false);
+        let viewers = user["viewersCount"].as_i64().unwrap_or(0);
+        let status_text = user["status"].as_str().unwrap_or("unknown");
+
+        let group_show_type = if status_text == "groupShow" {
+            self.get_group_show_type(username).await
+        } else {
+            None
+        };
+
+        let status = match status_text {
+            "public" => "公开秀".to_string(),
+            "private" => "私密秀".to_string(),
+            "groupShow" => match group_show_type.as_deref() {
+                Some("ticket") => "票务秀".to_string(),
+                Some("perMinute") => "计时秀".to_string(),
+                _ => "群组秀".to_string(),
+            },
+            "virtualPrivate" => "虚拟私密".to_string(),
+            "p2p" => "P2P".to_string(),
+            "idle" => "等待".to_string(),
+            "off" => "离线".to_string(),
+            _ => status_text.to_string(),
+        };
+
+        let thumbnail_url = if is_live {
+            let snapshot_ts = user["snapshotTimestamp"]
+                .as_i64()
+                .or_else(|| {
+                    user["snapshotTimestamp"]
+                        .as_str()
+                        .and_then(|s| s.parse().ok())
+                })
+                .unwrap_or(0);
+            let stream_name = cam["streamName"].as_str().unwrap_or("");
+            if snapshot_ts > 0 && !stream_name.is_empty() {
+                Some(format!(
+                    "https://img.doppiocdn.net/thumbs/{}/{}",
+                    snapshot_ts, stream_name
+                ))
+            } else {
+                user["previewUrl"].as_str().map(|s| s.to_string())
+            }
+        } else {
+            user["previewUrl"].as_str().map(|s| s.to_string())
+        };
+
+        let is_recordable = is_live && status_text == "public";
+        let playlist_url = if is_recordable && fetch_playlist {
+            self.get_playlist_url(username, &json).await.ok()
+        } else {
+            None
+        };
+
+        Ok(StreamInfo {
+            is_online: is_live,
+            is_recordable,
+            viewers,
+            status,
+            thumbnail_url,
+            playlist_url,
+        })
+    }
+
+/// Cloudflare 403/429 的内置重试与轮换辅助。
+/// 当直接请求被 Cloudflare 拦截时，自动尝试：
+/// 1. 当前浏览器指纹（已配置）；
+/// 2. 更激进的 Chrome profile（无 DoH，纯代理）；
+/// 3. 检查是否配置了代理并提示用户。
+/// 当直接请求被拦截时，自动尝试：已配置浏览器指纹、纯代理重试，并提示配置代理。
+pub async fn cloudflare_bypass_retry<F, Fut>(
+    operation: F,
+    proxy_url: Option<&str>,
+) -> Result<wreq::Response>
+where
+    F: Fn() -> Fut,
+    Fut: std::future::Future<Output = Result<wreq::Response>>,
+{
+    use std::time::Duration;
+    // Attempt 1: normal profile
+    match operation().await {
+        Ok(resp) => {
+            let s = resp.status().as_u16();
+            if s != 403 && s != 429 {
+                return Ok(resp);
+            }
+            tracing::warn!("Cloudflare block {} detected; attempting rotation", s);
+        }
+        Err(e) => tracing::warn!("First attempt failed ({}); attempting rotation", e),
+    }
+    // Attempt 2: retry with proxy (if configured)
+    if let Some(p) = proxy_url && !p.is_empty() {
+        tracing::info!("Proxy configured ({}); retrying through proxy", p);
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        return operation().await;
+    }
+    // Attempt 3: no proxy — return explicit guidance
+    tracing::error!("Cloudflare 403/429 persists with no proxy configured.");
+    Err(AppError::Other(
+        "API 被 Cloudflare 拦截。请在设置中配置 API 代理、CDN 代理或镜像站。 / \
+         Blocked by Cloudflare; please configure API proxy / CDN proxy / mirror site in Settings."
+        .into(),
+    ))
+}
+
+    /// 对所有 CDN TLD 竞速请求 `_auto.m3u8` master playlist，返回最先成功的响应文本。
+    /// Race all CDN TLDs for the `_auto.m3u8` master playlist and return the first successful response text.
+    async fn fetch_auto_playlist(&self, model_id: i64) -> Result<String> {
+        let client = &self.cdn_client;
+        let mut tasks = tokio::task::JoinSet::new();
+
+        for &tld in CDN_TLDS {
+            // 使用固定路径模板：edge-hls.{tld}/hls/{model_id}/master/{model_id}_auto.m3u8
+            let url = format!(
+                "https://edge-hls.{}/hls/{}/master/{}_auto.m3u8",
+                tld, model_id, model_id
+            );
+            let client = client.clone();
+            tasks.spawn(async move {
+                let resp = client.get(&url).header("Referer", REFERER).send().await;
+                (tld, url, resp)
+            });
+        }
+
+        let mut errors: Vec<(String, String)> = Vec::new();
+
+        while let Some(join_result) = tasks.join_next().await {
+            let (tld, url, result) = match join_result {
+                Ok(r) => r,
+                Err(_) => continue,
+            };
+            match result {
+                Ok(resp) if resp.status().is_success() => {
+                    tasks.abort_all();
+                    tracing::debug!("auto.m3u8 via CDN TLD: {}", tld);
+                    return Ok(resp.text().await?);
+                }
+                Ok(resp) => {
+                    errors.push((url, format!("HTTP {}", resp.status())));
+                }
+                Err(e) => {
+                    errors.push((url, e.to_string()));
+                }
+            }
+        }
+
+        for (url, err) in &errors {
+            tracing::error!("auto.m3u8 fetch failed [{}]: {}", url, err);
+        }
+        Err(AppError::Other(format!(
+            "All CDN TLDs failed for model {} _auto.m3u8",
+            model_id
+        )))
+    }
+
+    /// 从 master playlist 中选择首选分辨率，可配置优先向上或向下回退。
+    /// 若首选方向没有可用流，则使用反方向最接近的流；0 表示按带宽选择最高画质。
+    /// Select a preferred resolution from a master playlist, falling upward or downward first.
+    /// If no stream exists in the preferred direction, use the nearest stream in the other direction;
+    /// 0 selects the highest-bandwidth stream.
+    fn parse_stream(
+        playlist: &str,
+        preferred_resolution: u32,
+        prefers_higher_resolution: bool,
+    ) -> Option<(String, Vec<(String, String)>)> {
+        struct Variant {
+            url: String,
+            bandwidth: u64,
+            height: Option<u32>,
+        }
+
+        // 先把 \r\n 统一成 \n，再按 \n 分割
+        let normalized = playlist.replace("\r\n", "\n").replace('\r', "\n");
+        let lines: Vec<&str> = normalized.split('\n').map(|l| l.trim()).collect();
+
+        // 收集所有 Mouflon PSCH 参数对 (psch, pkey)
+        let mut mouflon_pairs: Vec<(String, String)> = Vec::new();
+        for &line in &lines {
+            if let Some(rest) = line.strip_prefix("#EXT-X-MOUFLON:PSCH:")
+                && let Some((scheme, key)) = rest.split_once(':')
+            {
+                mouflon_pairs.push((scheme.to_string(), key.to_string()));
+            }
+        }
+
+        let mut variants = Vec::new();
+        let mut pending_variant: Option<(u64, Option<u32>)> = None;
+
+        for &line in &lines {
+            if let Some(attrs) = line.strip_prefix("#EXT-X-STREAM-INF:") {
+                let bandwidth = attrs
+                    .split(',')
+                    .find_map(|seg| seg.trim().strip_prefix("BANDWIDTH="))
+                    .and_then(|value| value.parse::<u64>().ok())
+                    .unwrap_or(0);
+                let height = attrs
+                    .split(',')
+                    .find_map(|seg| seg.trim().strip_prefix("RESOLUTION="))
+                    .and_then(|value| value.split_once('x'))
+                    .and_then(|(width, height)| {
+                        Some((width.parse::<u32>().ok()?, height.parse::<u32>().ok()?))
+                    })
+                    .map(|(width, height)| width.min(height));
+                pending_variant = Some((bandwidth, height));
+            } else if !line.is_empty() && !line.starts_with('#') {
+                if let Some((bandwidth, height)) = pending_variant.take() {
+                    variants.push(Variant {
+                        url: line.to_string(),
+                        bandwidth,
+                        height,
+                    });
+                }
+            } else {
+                pending_variant = None;
+            }
+        }
+
+        let selected = if preferred_resolution == 0 {
+            variants.iter().max_by_key(|variant| variant.bandwidth)
+        } else {
+            let at_or_below = || {
+                variants
+                    .iter()
+                    .filter(|variant| {
+                        variant
+                            .height
+                            .is_some_and(|height| height <= preferred_resolution)
+                    })
+                    .max_by_key(|variant| (variant.height.unwrap_or(0), variant.bandwidth))
+            };
+            let at_or_above = || {
+                variants
+                    .iter()
+                    .filter(|variant| {
+                        variant
+                            .height
+                            .is_some_and(|height| height >= preferred_resolution)
+                    })
+                    .min_by(|a, b| {
+                        a.height
+                            .cmp(&b.height)
+                            .then_with(|| b.bandwidth.cmp(&a.bandwidth))
+                    })
+            };
+
+            let selected = if prefers_higher_resolution {
+                at_or_above().or_else(at_or_below)
+            } else {
+                at_or_below().or_else(at_or_above)
+            };
+
+            selected.or_else(|| {
+                variants
+                    .iter()
+                    // Some master playlists omit RESOLUTION; retain the old bandwidth behavior for them.
+                    .max_by_key(|variant| variant.bandwidth)
+            })
+        };
+
+        selected.map(|variant| (variant.url.clone(), mouflon_pairs))
+    }
+
+    /// 获取主播的 HLS 播放列表 URL。
+    /// 直接对所有 CDN TLD 竞速请求 `{model_id}_auto.m3u8`，按配置选择流。
+    /// 若 playlist 包含 Mouflon 加密参数，则按用户配置的 Mouflon Keys 顺序逐一比对，
+    /// 取第一个匹配的 pkey 对应的 psch 拼入 URL。
+    ///
+    /// Get the HLS playlist URL for a streamer.
+    /// Races all CDN TLDs for `{model_id}_auto.m3u8` and selects a stream using the configured resolution preference.
+    /// If the playlist contains Mouflon encryption parameters, iterates through the user-configured
+    /// Mouflon Keys in order and uses the first matching pkey's psch in the URL.
+    async fn get_playlist_url(
+        &self,
+        username: &str,
+        model_json: &serde_json::Value,
+    ) -> Result<String> {
+        let model_id = model_json["user"]["user"]["id"]
+            .as_i64()
+            .ok_or_else(|| AppError::Other("Cannot get model ID".to_string()))?;
+
+        let playlist_text = self.fetch_auto_playlist(model_id).await?;
+
+        let parsed = Self::parse_stream(
+            &playlist_text,
+            self.preferred_resolution,
+            self.prefers_higher_resolution,
+        );
+
+        let (url, mouflon_pairs) =
+            parsed.ok_or_else(|| AppError::StreamOffline(username.to_string()))?;
+
+        // 若存在 Mouflon 加密参数，则遍历用户配置的 keys，取第一个匹配的
+        // If Mouflon encryption parameters exist, iterate user-configured keys and use the first match
+        let final_url = if mouflon_pairs.is_empty() {
+            url
+        } else {
+            // 按 mouflon_pairs 顺序遍历，找到第一个在用户 keys 中存在的 pkey
+            // Iterate mouflon_pairs in order, find the first pkey present in user keys
+            let matched = mouflon_pairs
+                .iter()
+                .find(|(_, pkey)| self.mouflon_keys.contains_key(pkey.as_str()));
+
+            match matched {
+                Some((psch, pkey)) => {
+                    let sep = if url.contains('?') { "&" } else { "?" };
+                    format!("{}{}psch={}&pkey={}", url, sep, psch, pkey)
+                }
+                None => {
+                    // 没有匹配的 key，回退到第一个 pair（无解密密钥）
+                    // No matching key found, fall back to the first pair (no decryption key)
+                    let (psch, pkey) = &mouflon_pairs[0];
+                    let sep = if url.contains('?') { "&" } else { "?" };
+                    format!("{}{}psch={}&pkey={}", url, sep, psch, pkey)
+                }
+            }
+        };
+
+        tracing::info!("Using the URL: {}", final_url);
+
+        Ok(final_url)
+    }
+
+    /// 下载 HLS 播放列表文本内容。
+    /// Download the HLS playlist text content.
+    pub async fn fetch_playlist(&self, playlist_url: &str) -> Result<String> {
+        let resp = self.cdn_get(playlist_url).await?;
+        Ok(resp.text().await?)
+    }
+
+    /// 下载单个 HLS 分片的字节数据。
+    /// Download the byte data of a single HLS segment.
+    pub async fn download_segment(&self, url: &str) -> Result<Vec<u8>> {
+        let resp = self.cdn_get(url).await?;
+        let bytes = resp.bytes().await?.to_vec();
+        if bytes.is_empty() {
+            return Err(AppError::Other(format!("Downloaded 0 bytes from {}", url)));
+        }
+        Ok(bytes)
+    }
+}

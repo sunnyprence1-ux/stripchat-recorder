@@ -1,0 +1,97 @@
+name: Build and publish Docker image
+
+# Builds the image on GitHub's x86_64 runners, so the VPS never compiles Rust.
+# The pushed image contains the local source, including the merge fix in
+# backend/src/recording/recorder.rs.
+#
+# Image: ghcr.io/<owner>/<repo>:latest
+#
+# Required on the VPS: docker login ghcr.io with a token that has read:packages.
+
+on:
+  push:
+    branches: [main, master]
+    tags: ["v*"]
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Docker image names must be lowercase; GitHub repo names may not be.
+      - name: Compute image name
+        id: image
+        run: echo "name=${REGISTRY}/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push (linux/amd64)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ steps.image.outputs.name }}:latest
+            ${{ steps.image.outputs.name }}:${{ github.sha }}
+          # Layer cache makes rebuilds much faster than the first run.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # Optional: ARM64 image (Oracle Ampere, Hetzner CAX, Raspberry Pi, ...).
+  # Uses native ARM runners instead of slow QEMU emulation. Remove the
+  # `if: false` line to enable. Public repos get these runners for free.
+  build-arm64:
+    if: false
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Compute image name
+        id: image
+        run: echo "name=${REGISTRY}/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push (linux/arm64)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/arm64
+          push: true
+          tags: |
+            ${{ steps.image.outputs.name }}:arm64
+            ${{ steps.image.outputs.name }}:arm64-${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

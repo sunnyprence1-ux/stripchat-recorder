@@ -1,0 +1,608 @@
+# 后处理模块开发文档
+
+[简体中文](module-development.md) | [English](module-development.en.md)
+
+本文档描述如何为 StripchatRecorder 编写自定义后处理模块。
+
+---
+
+## 目录
+
+1. [概述](#概述)
+2. [模块协议](#模块协议)
+3. [元数据描述](#元数据描述)
+4. [参数类型](#参数类型)
+5. [多语言支持](#多语言支持)
+6. [流水线机制](#流水线机制)
+7. [进度上报](#进度上报)
+8. [pp_utils 工具库](#pp_utils-工具库)
+9. [完整示例](#完整示例)
+10. [部署模块](#部署模块)
+11. [内置模块](#内置模块)
+12. [注意事项](#注意事项)
+
+---
+
+## 概述
+
+后处理模块是**独立的可执行文件**，由主程序在录制完成后按流水线顺序依次调用。每个模块通过环境变量接收输入，通过标准输出与主程序通信。模块可以用任何语言编写，只要遵守本文档定义的协议即可。
+
+---
+
+## 模块协议
+
+### 调用约定
+
+主程序通过以下方式调用模块：
+
+```
+PP_INPUT=<path>  PP_PARAM_<KEY>=<value> ...  ./<module_binary>
+```
+
+模块必须支持两种调用模式：
+
+| 模式     | 命令                    | 说明                                |
+| -------- | ----------------------- | ----------------------------------- |
+| 描述模式 | `./<module> --describe` | 输出模块元数据 JSON，不执行任何处理 |
+| 执行模式 | `./<module>`            | 读取环境变量并执行处理逻辑          |
+
+### 环境变量
+
+| 变量             | 必填 | 说明                                       |
+| ---------------- | ---- | ------------------------------------------ |
+| `PP_INPUT`       | 是   | 输入视频文件的绝对路径                     |
+| `PP_PARAM_<KEY>` | 否   | 模块参数，`<KEY>` 为参数键名的大写形式     |
+| `PP_EXE_DIR`     | 否   | 模块二进制文件所在目录，可用于存放临时文件 |
+| `PP_SIDECAR_DIR` | 否   | 副产物输出目录（输出目录）。成片保存在最终视频目录，模块生成的图片等副产物应写入此目录，避免污染成片目录 |
+| `PP_TEST`        | 否   | 自检模式下为 `1`，此时**不提供** `PP_INPUT`（见下节） |
+| `PP_LOGIN`       | 否   | 主程序不设置；登录模式通过 `--login` 参数选择 |
+
+### 自检模式（`PP_TEST=1`）
+
+在元数据中声明 `"testable": true` 的模块，可以在「后处理」页面通过节点上的「测试」按钮直接运行。
+自检模式下主程序会：
+
+- 以 `PP_TEST=1` 加上节点当前的 `PP_PARAM_<KEY>` 参数启动模块；
+- **不设置** `PP_INPUT`（此时没有待处理的视频）；
+- 捕获 stdout/stderr 并在对话框中逐行展示；
+- 退出码非 0 视为失败（最后一行 stderr 作为错误信息）。
+
+模块应校验所有运行时可能失败的因素——凭据、网络连通性、权限等——并输出便于阅读的进度行。
+除测试动作本身外（例如 `notify_telegram` 会向配置的群组/话题发送一个很小的测试视频），
+自检不应产生其他副作用。自检模式不需要输出 `OUTPUT:`：模块是独立运行的，不参与流水线。
+
+### 交互式登录模式（`--login`）
+
+有些模块需要人工登录一次（例如 Telegram 用户账号需要手机号和验证码），
+这类登录无法在单次短命进程内完成。声明 `"loginable": true` 的模块会在「后处理」页面
+多出一个「登录」按钮：主程序以 `--login` 参数启动模块并**保持进程存活**，
+通过行协议分步驱动：
+
+| 方向         | 行内容                                                 |
+| ------------ | ------------------------------------------------------ |
+| 宿主 → 模块  | `命令:值`，如 `phone:+8613800138000`、`code:12345`、`password:密码`、`quit` |
+| 模块 → 宿主  | `LOGIN_STATE:<状态>[:<附加信息>]`                       |
+
+主程序会持续读取 stdout，直到出现 `LOGIN_STATE:` 开头的行为止，并把该状态显示在对话框中；
+其他 stdout/stderr 行作为日志逐行展示。建议使用以下状态：
+
+| 状态                        | 含义                                        |
+| --------------------------- | ------------------------------------------- |
+| `ready`                     | 已连接，等待第一项输入（手机号）            |
+| `code_sent`                 | 验证码已发送，等待 `code:`                  |
+| `password_required:<hint>`  | 已开启两步验证，等待 `password:`            |
+| `invalid_code`              | 验证码错误，界面允许重新输入                |
+| `invalid_password`          | 密码错误，界面允许重新输入                  |
+| `done:<名称>:<等级>`        | 登录成功，进程退出                          |
+| `already:<名称>:<等级>`     | 已有会话仍然有效，无需登录                  |
+| `error:<信息>`              | 失败，进程以非 0 退出码结束                 |
+
+模块还可以输出 `LOGIN_STATE:session:<路径>`，告知宿主凭据保存位置，界面会显示该路径。
+登录完成后应立即退出；若用户关闭对话框，主程序会关闭 stdin 并结束进程，
+因此不要把「进程存活」作为登录状态的前提。
+
+### 标准输出协议
+
+模块通过向标准输出写入特定前缀的行与主程序通信：
+
+| 输出行                    | 说明                                                                                                                                  |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `OUTPUT:<path>`           | **必须输出一次**。将 `<path>` 作为下一个模块的输入传递。若模块删除了文件（如 `filter_short`），则不输出此行，流水线后续模块将被跳过。 |
+| `DELETE_INPUT`            | 请求主程序删除该录制的**全部本地数据**（成片、`.ts` 分片目录、元数据、模块副产物），用于「上传成功后清空服务器」。可以配合 `OUTPUT:` 一起输出（`notify_telegram` 就是这样）；当输出路径与输入相同时，流水线在本节点后中止。 |
+| `PROGRESS:<done>/<total>` | 进度上报，`done` 和 `total` 均为整数，`total` 固定为 `10000`（即 `done=5000` 表示 50%）。                                             |
+| `STATUS:<text>`           | 可选的状态文字（如上传速度），显示在 UI 的进度条旁。                                                                                  |
+| `SKIP:<reason>`           | 可选。通知主程序本模块已跳过处理（如输出文件已存在），仍需输出 `OUTPUT:` 行。                                                         |
+
+非协议行（不以上述前缀开头的行）会被主程序忽略。
+
+### 标准错误
+
+所有诊断信息、警告和错误消息应写入标准错误（stderr）。主程序会捕获 stderr 内容并在模块失败时展示给用户。
+
+### 退出码
+
+| 退出码 | 含义                               |
+| ------ | ---------------------------------- |
+| `0`    | 成功                               |
+| 非零   | 失败，流水线中止，后续模块不再执行 |
+
+---
+
+## 元数据描述
+
+当以 `--describe` 参数调用时，模块必须向标准输出打印一个 JSON 对象，然后以退出码 `0` 退出。
+
+### JSON 结构
+
+```jsonc
+{
+	"id": "my_module", // 模块唯一标识符，仅含小写字母、数字和下划线
+	"name": "我的模块", // UI 中显示的名称
+	"description": "模块功能描述", // UI 中显示的简短描述
+	"testable": true, // 可选：开启「测试」按钮（PP_TEST=1）
+	"loginable": true, // 可选：开启「登录」按钮（--login）
+	"params": [
+		// 参数列表，可为空数组
+		{
+			"key": "param_key", // 参数键名，对应环境变量 PP_PARAM_PARAM_KEY
+			"label": "参数标签", // UI 中显示的标签
+			"type": "string", // 参数类型，见下文
+			"default": "", // 默认值
+		},
+	],
+}
+```
+
+### 字段说明
+
+| 字段          | 类型    | 必填 | 说明                              |
+| ------------- | ------- | ---- | --------------------------------- |
+| `id`          | string  | 是   | 模块唯一 ID，在同一实例中不可重复 |
+| `name`        | string  | 是   | UI 显示名称                       |
+| `description` | string  | 是   | UI 显示描述                       |
+| `params`      | array   | 是   | 参数定义列表，无参数时传空数组    |
+| `testable`    | boolean | 否   | 为 `true` 时显示「测试」按钮（`PP_TEST=1`），默认 `false` |
+| `loginable`   | boolean | 否   | 为 `true` 时显示「登录」按钮（`--login`），默认 `false` |
+
+---
+
+## 参数类型
+
+`params` 数组中每个对象的 `type` 字段决定 UI 渲染方式和环境变量的值格式。
+
+| 类型      | UI 控件    | 环境变量值格式           |
+| --------- | ---------- | ------------------------ |
+| `string`  | 文本输入框 | 任意字符串               |
+| `number`  | 数字输入框 | 十进制整数或浮点数字符串 |
+| `boolean` | 开关       | `"true"` 或 `"false"`    |
+| `select`  | 下拉选择框 | 选项值字符串             |
+
+`select` 类型需额外提供 `options` 字段：
+
+```jsonc
+{
+	"key": "format",
+	"label": "输出格式",
+	"type": "select",
+	"default": "webp",
+	"options": ["webp", "jpg", "png"],
+}
+```
+
+---
+
+## 多语言支持
+
+模块可以在 DESCRIBE JSON 中声明可选的 `i18n` 字段，为 `name`、`description` 和参数 `label` 提供多语言翻译。主程序会根据用户当前的界面语言自动选择对应翻译，找不到时回退到原始字段值。
+
+### JSON 结构
+
+```jsonc
+{
+	"id": "my_module",
+	"name": "我的模块", // 默认语言（中文）
+	"description": "模块功能描述",
+	"params": [
+		{
+			"key": "dest_dir",
+			"label": "目标目录路径",
+			"type": "string",
+			"default": ""
+		}
+	],
+	"i18n": {
+		"en-US": {
+			"name": "My Module",
+			"description": "Module description",
+			"params": {
+				"dest_dir": { "label": "Destination Directory" }
+			}
+		}
+		// 可继续添加其他语言，如 "ja-JP": { ... }
+	}
+}
+```
+
+### 字段说明
+
+`i18n` 对象的键为 BCP 47 语言标签（如 `"en-US"`、`"ja-JP"`），值为该语言的翻译对象：
+
+| 字段          | 类型   | 必填 | 说明                                                   |
+| ------------- | ------ | ---- | ------------------------------------------------------ |
+| `name`        | string | 否   | 该语言下的模块名称，省略时使用顶层 `name`              |
+| `description` | string | 否   | 该语言下的模块描述，省略时使用顶层 `description`       |
+| `params`      | object | 否   | 键为参数 `key`，值为 `{ "label": "..." }`，省略时使用参数原始 `label` |
+
+所有翻译字段均为可选，未提供的字段自动回退到原始值，因此可以只翻译部分字段。
+
+---
+
+## 流水线机制
+
+流水线由一组有序的模块节点组成。主程序按顺序执行每个已启用的节点：
+
+1. 将上一个模块输出的 `OUTPUT:` 路径作为下一个模块的 `PP_INPUT`。第一个模块的 `PP_INPUT` 为录制完成的原始视频路径。
+2. 若某个模块退出码非零，流水线立即中止，后续模块不再执行。
+3. 若某个模块未输出 `OUTPUT:` 行（例如文件已被删除），流水线同样中止。
+
+```
+录制完成
+    │
+    ▼  PP_INPUT=/recordings/alice_20240101_120000.ts
+┌─────────────┐
+│ filter_short│ ── 时长不足，删除文件，不输出 OUTPUT → 流水线终止
+│             │ ── 时长满足 → OUTPUT:/recordings/alice_20240101_120000.ts
+└─────────────┘
+    │
+    ▼  PP_INPUT=/recordings/alice_20240101_120000.ts
+┌──────────────┐
+│contact_sheet │ ── OUTPUT:/recordings/alice_20240101_120000.ts
+└──────────────┘
+    │
+    ▼  PP_INPUT=/recordings/alice_20240101_120000.ts
+┌────────────────┐
+│ notify_discord │ ── OUTPUT:/recordings/alice_20240101_120000.ts
+└────────────────┘
+    │
+   完成
+```
+
+---
+
+## 进度上报
+
+进度通过向 stdout 输出 `PROGRESS:<done>/<total>` 行来上报，其中 `total` 固定为 `10000`。
+
+```
+PROGRESS:0/10000      # 0%
+PROGRESS:5000/10000   # 50%
+PROGRESS:10000/10000  # 100%
+```
+
+**注意事项：**
+
+- 主程序会取所有上报值中的最大值，进度不会倒退。
+- 建议在处理开始前输出 `PROGRESS:0/10000`，结束后输出 `PROGRESS:10000/10000`。
+- 对于固定步骤的任务，可按步骤均分进度（如 3 步：0、3333、6666、10000）。
+
+---
+
+## pp_utils 工具库
+
+`pp_utils` 是项目内置的 Rust 工具库，封装了所有模块常用的功能。使用 Rust 编写模块时强烈建议依赖此库。
+
+在 `Cargo.toml` 中引入：
+
+```toml
+[dependencies]
+pp_utils = { path = "../pp_utils" }
+```
+
+### 读取参数
+
+```rust
+use pp_utils::{param, param_u32, param_f64, param_bool};
+
+let url: String   = param("webhook_url", "");        // 字符串参数
+let interval: u32 = param_u32("interval", 30);       // u32 参数
+let min_dur: f64  = param_f64("min_duration", 60.0); // f64 参数
+let dry_run: bool = param_bool("dry_run", false);    // 布尔参数（"true"/"1"/"yes" 均视为 true）
+```
+
+参数键名不区分大小写，`param("interval", ...)` 对应环境变量 `PP_PARAM_INTERVAL`。
+
+### 视频工具
+
+```rust
+use pp_utils::video_duration;
+use std::path::Path;
+
+// 通过 ffprobe 获取视频时长（秒），ffprobe 不可用时返回 None
+let duration: Option<f64> = video_duration(Path::new("/path/to/video.ts"));
+```
+
+### 格式化工具
+
+```rust
+use pp_utils::{format_duration, format_bytes, format_speed};
+
+format_duration(3661.0);   // "01:01:01"
+format_bytes(1_500_000);   // "1.43 MB"
+format_speed(1_048_576.0); // "↑ 1.0 MB/s"
+```
+
+### 文件名解析
+
+录制文件名格式为 `{model_name}_{YYYYMMDD}_{HHmmss}`。
+
+```rust
+use pp_utils::parse_stem;
+
+let (model, timestamp) = parse_stem("alice_20240101_120000");
+// model = "alice", timestamp = "2024-01-01 12:00:00"
+
+// 含下划线的主播名同样支持
+let (model, timestamp) = parse_stem("my_streamer_20240101_120000");
+// model = "my_streamer", timestamp = "2024-01-01 12:00:00"
+```
+
+### 封面图查找
+
+在视频同目录下查找同名封面图，支持 `jpg`、`jpeg`、`webp`、`png`。
+
+```rust
+use pp_utils::find_cover;
+use std::path::Path;
+
+let cover: Option<PathBuf> = find_cover(Path::new("/recordings/alice_20240101_120000.ts"));
+// 若存在则返回 /recordings/alice_20240101_120000.webp 等
+```
+
+### 图片与视频元数据
+
+```rust
+use pp_utils::{image_dimensions, video_meta};
+use std::path::Path;
+
+// 通过 ffprobe 获取图片宽高
+let dims: Option<(u32, u32)> = image_dimensions(Path::new("/recordings/cover.webp"));
+// 返回 Some((1280, 720)) 或 None
+
+// 一次调用获取视频时长、宽度和高度
+let meta: Option<(f64, i32, i32)> = video_meta(Path::new("/recordings/alice_20240101_120000.ts"));
+// 返回 Some((时长秒数, 宽度, 高度)) 或 None
+```
+
+### 临时目录
+
+返回 `PP_EXE_DIR` 下的 `tmp/` 子目录（若未设置 `PP_EXE_DIR` 则使用模块二进制文件所在目录）。目录会自动创建。
+
+```rust
+use pp_utils::tmp_dir;
+
+let tmp: PathBuf = tmp_dir();
+// 例如 /app/stripchat-recorder/modules/tmp/
+```
+
+### 进度上报
+
+```rust
+use pp_utils::{emit_progress, emit_progress_step, PROGRESS_SCALE};
+
+// PROGRESS_SCALE = 10_000，可用于手动构造进度输出
+println!("PROGRESS:0/{}", PROGRESS_SCALE);
+
+// 按已完成量/总量上报（自动缩放到 10000）
+emit_progress(0, 100);   // PROGRESS:0/10000
+emit_progress(50, 100);  // PROGRESS:5000/10000
+emit_progress(100, 100); // PROGRESS:10000/10000
+
+// 按固定步骤上报
+emit_progress_step(0, 3); // PROGRESS:0/10000
+emit_progress_step(1, 3); // PROGRESS:3333/10000
+emit_progress_step(2, 3); // PROGRESS:6667/10000
+emit_progress_step(3, 3); // PROGRESS:10000/10000
+```
+
+---
+
+## 完整示例
+
+以下是一个完整的 Rust 模块示例，功能为将视频文件复制到指定目录。
+
+### `Cargo.toml`
+
+```toml
+[package]
+name = "copy_to_dir"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "copy_to_dir"
+path = "src/main.rs"
+
+[dependencies]
+pp_utils = { path = "../pp_utils" }
+```
+
+### `src/main.rs`
+
+```rust
+use pp_utils::{emit_progress_step, param};
+use std::env;
+use std::path::PathBuf;
+
+const DESCRIBE: &str = r#"{
+  "id": "copy_to_dir",
+  "name": "复制到目录",
+  "description": "将录制文件复制到指定目录",
+  "params": [
+    {
+      "key": "dest_dir",
+      "label": "目标目录路径",
+      "type": "string",
+      "default": ""
+    }
+  ],
+  "i18n": {
+    "en-US": {
+      "name": "Copy to Directory",
+      "description": "Copies the recording to a specified directory",
+      "params": {
+        "dest_dir": { "label": "Destination Directory" }
+      }
+    }
+  }
+}"#;
+
+fn run() -> Result<(), String> {
+    let input_str = env::var("PP_INPUT").map_err(|_| "PP_INPUT not set".to_string())?;
+    let input = PathBuf::from(&input_str);
+
+    if !input.exists() {
+        return Err(format!("Input file not found: {}", input.display()));
+    }
+
+    let dest_dir = param("dest_dir", "");
+    if dest_dir.is_empty() {
+        return Err("dest_dir is required".to_string());
+    }
+
+    emit_progress_step(0, 2);
+
+    std::fs::create_dir_all(&dest_dir)
+        .map_err(|e| format!("Failed to create dest_dir: {}", e))?;
+
+    let file_name = input.file_name().ok_or("Invalid input filename")?;
+    let dest_path = PathBuf::from(&dest_dir).join(file_name);
+
+    std::fs::copy(&input, &dest_path)
+        .map_err(|e| format!("Copy failed: {}", e))?;
+
+    emit_progress_step(2, 2);
+
+    // 输出原始文件路径，传递给下一个模块
+    println!("OUTPUT:{}", input.display());
+    Ok(())
+}
+
+fn main() {
+    let args: Vec<String> = env::args().collect();
+    if args.get(1).map(|s| s.as_str()) == Some("--describe") {
+        print!("{}", DESCRIBE);
+        return;
+    }
+    if let Err(e) = run() {
+        eprintln!("{}", e);
+        std::process::exit(1);
+    }
+}
+```
+
+### 构建
+
+```bash
+cargo build --release --bins
+# 产物位于 target/release/copy_to_dir
+```
+
+---
+
+## 部署模块
+
+将编译好的模块二进制文件放入 Docker 的 `modules` 目录即可被自动发现。
+
+```bash
+# 将二进制文件复制到宿主机的 modules 目录
+cp ./copy_to_dir ./data/modules/copy_to_dir
+chmod +x ./data/modules/copy_to_dir
+```
+
+完成后在 Web UI 的「设置 → 后处理流水线」中即可看到并启用新模块。
+
+> **注意：** 每次容器启动时，`modules.default` 中在 `modules` 里尚不存在的文件会被补充复制进来，已存在的文件不会被覆盖。因此自定义模块和手动替换的内置模块在重启后均会保留。
+
+---
+
+## 内置模块
+
+项目自带以下四个模块，位于 `modules/` 目录，容器启动时会自动复制到 `modules.default/`。
+
+| 模块 ID           | 说明                                                                 |
+| ----------------- | -------------------------------------------------------------------- |
+| `filter_short`    | 请求主程序删除时长低于阈值的视频，支持 `dry_run` 预览模式            |
+| `contact_sheet`   | 按指定间隔截帧，拼合成带时间戳水印的预览图，保存到视频同目录         |
+| `notify_discord`  | 将录制信息和封面图通过 Webhook 发送到 Discord，支持 HTTP/SOCKS5 代理 |
+| `notify_telegram` | 通过 MTProto 将录制信息、封面图和视频发送到 Telegram，支持超过 2GB 的大文件自动分割 |
+
+### filter_short 参数
+
+| 参数           | 类型    | 默认值 | 说明                         |
+| -------------- | ------- | ------ | ---------------------------- |
+| `min_duration` | number  | `60`   | 最短时长（秒），低于此值删除 |
+| `dry_run`      | boolean | `false`| 仅预览，不实际删除           |
+
+### contact_sheet 参数
+
+| 参数         | 类型   | 默认值  | 说明                                   |
+| ------------ | ------ | ------- | -------------------------------------- |
+| `interval`   | number | `30`    | 截帧间隔（秒）                         |
+| `thumb_width`| number | `320`   | 单帧宽度（px）                         |
+| `format`     | select | `webp`  | 图片格式：`webp`、`jpg`、`png`         |
+| `quality`    | number | `100`   | 图片质量（1-100，jpg/webp 有效）       |
+| `cols`       | number | `0`     | 列数，`0` 为自动                       |
+| `rows`       | number | `0`     | 行数，`0` 为自动                       |
+| `fontfile`   | string | `""`    | 字体文件路径，留空自动检测             |
+| `fontsize`   | number | `18`    | 时间戳字号                             |
+
+### notify_discord 参数
+
+| 参数          | 类型   | 默认值          | 说明                              |
+| ------------- | ------ | --------------- | --------------------------------- |
+| `webhook_url` | string | `""`            | Discord Webhook URL（必填）       |
+| `proxy`       | string | `""`            | 代理地址，支持 `http://`、`socks5://` |
+| `username`    | string | `Recorder Bot`  | Bot 显示名称                      |
+
+### notify_telegram 参数
+
+| 参数          | 类型    | 默认值  | 说明                                              |
+| ------------- | ------- | ------- | ------------------------------------------------- |
+| `api_id`      | string  | `""`    | Telegram API ID（从 my.telegram.org 获取，必填）  |
+| `api_hash`    | string  | `""`    | Telegram API Hash（必填）                         |
+| `bot_token`   | string  | `""`    | Bot Token（从 @BotFather 获取，必填）             |
+| `chat_id`     | string  | `""`    | Chat ID，群组/超级群组格式为 `-100xxxxxxxxxx`（必填）；私有群组没有 username，只能填 ID |
+| `username`    | string  | `""`    | 群组 Username，可选（仅公开群组，不含 `@`；私有群组留空） |
+| `proxy`       | string  | `""`    | 代理地址，支持 `http://`、`socks5://`             |
+| `send_video`  | boolean | `true`  | 是否同时发送视频文件                              |
+| `send_caption` | boolean | `false` | 是否在视频消息里附带文字说明（模特名、时间、时长、文件名、大小）。默认关闭：只发视频，消息里没有任何文字 |
+| `send_cover`  | boolean | `true`  | 是否同时发送封面图（联系表截图）。关闭后相册里只有视频 |
+| `cover_first` | boolean | `true`  | 是否先把封面图单独作为一条图片消息发出，再上传并发送视频。关闭后封面图和视频合在同一条相册消息里 |
+| `topic_per_model` | boolean | `true` | 按模特名自动创建/复用群组话题（Topic），视频发送到对应话题；群组需为论坛模式且 Bot 具备「管理话题」权限 |
+| `delete_after_send` | boolean | `true` | 发送成功后请求主程序删除本地数据（成片、分片目录、元数据、模块副产物），释放服务器空间 |
+| `upload_workers` | number | `8` | 内置上传器同时上传多少个 512KB 分块（上限 16，`0` = 默认）。串行上传要等每个分块回包，加速就来自这里 |
+
+#### 上传速度
+
+上传改成「512KB 分块、多块并发」，而不是逐块串行。旧的串行循环要等服务器确认每一个分块，一个
+100MB 的视频就是约 200 次串行往返；8 个分块并发把这些往返重叠起来。每个分块仍然独立重试，所以
+断线后是续传而不是整份重来。
+
+走真实发送路径、同一个 12MB 视频、在拥堵的手机上行链路上交替实测：58.3s → 27.3s、112.7s → 76.7s、
+48.3s → 32.1s，中位数 **1.8 倍**（约 205 → 375 KB/s）。上限是链路本身，所以往返时延占比越大
+（远距离 VPS、代理、卫星链路）收益越明显。
+
+> 开发过程中也实现并实测过 Telethon + FastTelethon 侧车，最终**移除**了：在这条链路上它一直比内置
+> 上传器慢（12MB 时 132 vs 167 KB/s，40MB 时 310 vs 438 KB/s）；而且和存活的 grammers 连接共用同一个
+> auth key 时，Telegram 会按 Telethon 更高的 layer 序列化响应，grammers 解析不了——发送会失败并报
+> `unexpected constructor: 7600b9d3`（一个更新的 `message#` 构造器）。
+
+---
+
+## 注意事项
+
+- 模块应为**无状态**的，不依赖上次执行的任何残留状态。
+- 模块不应修改或删除 `PP_INPUT` 以外的文件，除非这是其明确功能（如 `filter_short`）。
+- 若模块需要临时文件，建议使用 `PP_EXE_DIR/tmp/` 目录，并在退出前清理。
+- 若模块会生成副产物（如联系表图片），请写入 `PP_SIDECAR_DIR`（未设置时回退到输入视频所在目录），不要写入成片所在目录。
+- 模块必须在合理时间内完成，长时间无进度输出可能导致 UI 显示异常。

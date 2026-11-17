@@ -1,0 +1,32 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Build output
+build/
+build_tmp/
+# Cargo target dirs — the project builds into build_tmp/, but running `cargo test`
+# inside a crate directory creates a target/ next to it
+target/
+nohup.out
