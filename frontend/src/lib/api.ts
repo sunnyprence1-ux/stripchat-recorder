@@ -201,6 +201,11 @@ const COMMAND_MAP: Record<
 		url: () => "/api/recordings/postprocess",
 		body: (a) => ({ path: a.path }),
 	},
+	run_postprocess_batch: {
+		method: "POST",
+		url: () => "/api/recordings/postprocess-batch",
+		body: (a) => ({ paths: a.paths }),
+	},
 	cancel_postprocess: {
 		method: "POST",
 		url: () => "/api/recordings/postprocess-cancel",

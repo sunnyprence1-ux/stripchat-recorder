@@ -96,6 +96,10 @@ export default {
 		},
 		batchPostprocess: "Batch Post-process ({count})",
 		deleteSelected: "Delete Selected ({count})",
+		postprocessAll: "Post-process All ({count})",
+		postprocessAllShort: "Post All ({count})",
+		deleteAllVideos: "Delete All Videos ({count})",
+		deleteAllShort: "Delete All ({count})",
 		openDir: "Open Directory",
 		loading: "Loading...",
 		empty: "No recordings yet",
@@ -143,6 +147,20 @@ export default {
 			batchMessage: "Are you sure you want to delete {count} selected file(s)? This cannot be undone.",
 			batchDone: "Deleted {count} file(s)",
 			batchFailed: "Done, {count} file(s) failed",
+		},
+		postprocessAllDialog: {
+			title: "Post-process All Videos",
+			message:
+				"Queue {count} finished video(s) for post-processing? Files already running or waiting are skipped.",
+			confirm: "Start",
+		},
+		deleteAllDialog: {
+			title: "Delete All Videos",
+			message:
+				"Delete {count} video file(s)? Files currently recording or being uploaded are skipped. This cannot be undone.",
+			confirm: "Delete All",
+			done: "Deleted {count} file(s)",
+			failed: "Done, {count} file(s) failed",
 		},
 		otherClientDeleted: "Another client deleted recording: {name}",
 	},

@@ -7,7 +7,8 @@
     - 文件合并进度跟踪
     - 后处理流水线触发和进度显示
     - Contact Sheet 预览图查看（带缩放/平移）
-    - 单文件和批量删除
+    - 单文件、批量和删除全部视频
+    - 后处理全部视频
     - 多列排序和分组折叠
 
     Displays all recording files grouped by streamer, supporting:
@@ -16,7 +17,8 @@
     - File merge progress tracking
     - Post-processing pipeline triggering and progress display
     - Contact Sheet preview image viewing (with zoom/pan)
-    - Single and batch file deletion
+    - Single, batch, and delete-all video actions
+    - Post-process all videos
     - Multi-column sorting and group collapsing
 -->
 <script setup lang="ts">
@@ -321,6 +323,40 @@
 		else toast(t("recordings.delete.batchDone", { count }), "success");
 	}
 
+	/** 判断文件能否加入后处理队列 / Whether a file can be queued for post-processing */
+	function isPostProcessable(path: string) {
+		const f = files.value.find((item) => item.path === path);
+		return (
+			ppStatus.value[path] !== "running" &&
+			ppStatus.value[path] !== "waiting" &&
+			!!f &&
+			!f.is_recording &&
+			!f.status?.startsWith("merging")
+		);
+	}
+
+	/** 按录制开始时间排序 / Sort paths by recording start time */
+	function sortByStartTime(paths: string[]) {
+		return [...paths].sort((a, b) => {
+			const fa = files.value.find((f) => f.path === a);
+			const fb = files.value.find((f) => f.path === b);
+			return (
+				new Date(fa?.started_at ?? 0).getTime() -
+				new Date(fb?.started_at ?? 0).getTime()
+			);
+		});
+	}
+
+	/** 批量提交后处理任务（一次请求）/ Queue post-processing tasks in one batch request */
+	async function queuePostprocess(paths: string[]) {
+		if (paths.length === 0) return;
+		try {
+			await call("run_postprocess_batch", { paths });
+		} catch (e) {
+			toast(String(e), "error");
+		}
+	}
+
 	/**
 	 * 对所有已选中且符合条件的文件批量触发后处理。
 	 * 按录制开始时间排序，确保处理顺序一致。
@@ -329,41 +365,87 @@
 	 * Sorted by recording start time to ensure consistent processing order.
 	 */
 	async function postProcessSelected() {
-		const paths = [...selected.value].filter(
-			(p) =>
-				ppStatus.value[p] !== "running" &&
-				ppStatus.value[p] !== "waiting" &&
-				!files.value.find((f) => f.path === p)?.is_recording &&
-				!files.value.find((f) => f.path === p)?.status?.startsWith("merging"),
-		);
+		const paths = sortByStartTime([...selected.value].filter(isPostProcessable));
 		if (paths.length === 0) return;
 		selected.value.clear();
-		paths.sort((a, b) => {
-			const fa = files.value.find((f) => f.path === a);
-			const fb = files.value.find((f) => f.path === b);
-			return (
-				new Date(fa?.started_at ?? 0).getTime() -
-				new Date(fb?.started_at ?? 0).getTime()
-			);
-		});
-		for (const path of paths) {
-			await call("run_postprocess_cmd", { path }).catch((e) => {
-				toast(String(e), "error");
-			});
-		}
+		await queuePostprocess(paths);
 	}
 
 	/** 已选中文件中可触发后处理的数量 / Number of selected files eligible for post-processing */
 	const ppSelectableCount = computed(
-		() =>
-			[...selected.value].filter(
-				(p) =>
-					ppStatus.value[p] !== "running" &&
-					ppStatus.value[p] !== "waiting" &&
-					!files.value.find((f) => f.path === p)?.is_recording &&
-					!files.value.find((f) => f.path === p)?.status?.startsWith("merging"),
-			).length,
+		() => [...selected.value].filter(isPostProcessable).length,
 	);
+
+	/** 全部可后处理的文件路径（按开始时间排序）/ All post-processable paths, sorted by start time */
+	const ppAllPaths = computed(() =>
+		sortByStartTime(files.value.filter((f) => isPostProcessable(f.path)).map((f) => f.path)),
+	);
+
+	/** 全部可删除的视频路径：跳过录制中和正在上传的文件 / All deletable videos, skipping active recordings and uploads */
+	const deleteAllPaths = computed(() =>
+		files.value
+			.filter((f) => !f.is_recording && !tg.isSending(f.path))
+			.map((f) => f.path),
+	);
+
+	/** 一键后处理所有已完成视频 / Post-process every finished video */
+	async function postProcessAll() {
+		const paths = ppAllPaths.value;
+		if (paths.length === 0) return;
+		const ok = await confirm({
+			title: t("recordings.postprocessAllDialog.title"),
+			message: t("recordings.postprocessAllDialog.message", { count: paths.length }),
+			confirmText: t("recordings.postprocessAllDialog.confirm"),
+		});
+		if (!ok) return;
+		selected.value.clear();
+		await queuePostprocess(paths);
+	}
+
+	/** 一键删除所有视频（保留录制中和上传中的文件）/ Delete every video, keeping active recordings and uploads */
+	async function deleteAllVideos() {
+		const paths = deleteAllPaths.value;
+		if (paths.length === 0) return;
+		const ok = await confirm({
+			title: t("recordings.deleteAllDialog.title"),
+			message: t("recordings.deleteAllDialog.message", { count: paths.length }),
+			confirmText: t("recordings.deleteAllDialog.confirm"),
+			danger: true,
+		});
+		if (!ok) return;
+
+		await Promise.all(
+			paths
+				.filter((p) => ppStatus.value[p] === "running")
+				.map((p) => {
+					ppCancelledByDelete.add(p);
+					return call("cancel_postprocess", { path: p }).catch(() => {});
+				}),
+		);
+
+		let failed = 0;
+		for (const path of paths) {
+			try {
+				localDeletedPaths.add(path);
+				await call("delete_recording", { path });
+				files.value = files.value.filter((r) => r.path !== path);
+				delete elapsed.value[path];
+				ppRemoveFile(path);
+				selected.value.delete(path);
+			} catch {
+				localDeletedPaths.delete(path);
+				failed++;
+			}
+		}
+		selected.value.clear();
+		if (failed > 0)
+			toast(t("recordings.deleteAllDialog.failed", { count: failed }), "error");
+		else
+			toast(
+				t("recordings.deleteAllDialog.done", { count: paths.length }),
+				"success",
+			);
+	}
 
 	/** 所有正在录制文件的总录制速度（字节/秒）/ Total recording speed (bytes/second) */
 	const totalRecordingSpeed = computed(() =>
@@ -802,8 +884,24 @@
 					</span>
 				</div>
 			</div>
-			<!-- 桌面端批量操作；移动端改用底部固定操作栏 / Desktop batch actions; mobile uses the fixed bottom bar -->
-			<div class="hidden md:flex gap-2 shrink-0">
+			<!-- 桌面端全局与批量操作；移动端改用工具栏和底部固定操作栏 / Desktop global and batch actions; mobile uses toolbar and bottom bar -->
+			<div v-if="files.length > 0" class="hidden md:flex gap-2 shrink-0">
+				<Button
+					variant="outline"
+					size="sm"
+					:disabled="ppAllPaths.length === 0"
+					@click="postProcessAll"
+				>
+					{{ t("recordings.postprocessAll", { count: ppAllPaths.length }) }}
+				</Button>
+				<Button
+					variant="destructive"
+					size="sm"
+					:disabled="deleteAllPaths.length === 0"
+					@click="deleteAllVideos"
+				>
+					{{ t("recordings.deleteAllVideos", { count: deleteAllPaths.length }) }}
+				</Button>
 				<Button
 					v-if="selectedCount > 0"
 					variant="outline"
@@ -863,6 +961,24 @@
 			>
 				{{ t(col.labelKey) }}
 				<component :is="sortIcon(col.key)" class="size-3.5" />
+			</Button>
+			<Button
+				variant="outline"
+				size="sm"
+				class="shrink-0 text-xs px-2"
+				:disabled="ppAllPaths.length === 0"
+				@click="postProcessAll"
+			>
+				{{ t("recordings.postprocessAllShort", { count: ppAllPaths.length }) }}
+			</Button>
+			<Button
+				variant="destructive"
+				size="sm"
+				class="shrink-0 text-xs px-2"
+				:disabled="deleteAllPaths.length === 0"
+				@click="deleteAllVideos"
+			>
+				{{ t("recordings.deleteAllShort", { count: deleteAllPaths.length }) }}
 			</Button>
 		</div>
 

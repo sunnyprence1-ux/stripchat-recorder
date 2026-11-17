@@ -96,6 +96,10 @@
     },
     "batchPostprocess": "批量后处理 ({count})",
     "deleteSelected": "删除选中 ({count})",
+    "postprocessAll": "后处理全部 ({count})",
+    "postprocessAllShort": "全部后处理 ({count})",
+    "deleteAllVideos": "删除全部视频 ({count})",
+    "deleteAllShort": "全部删除 ({count})",
     "openDir": "打开目录",
     "loading": "加载中...",
     "empty": "暂无录制文件",
@@ -142,6 +146,18 @@
       "batchMessage": "确定要删除选中的 {count} 个文件吗？此操作不可撤销。",
       "batchDone": "已删除 {count} 个文件",
       "batchFailed": "删除完成，{count} 个文件失败"
+    },
+    "postprocessAllDialog": {
+      "title": "后处理全部视频",
+      "message": "将 {count} 个已完成视频加入后处理队列？正在运行或等待中的文件会跳过。",
+      "confirm": "开始"
+    },
+    "deleteAllDialog": {
+      "title": "删除全部视频",
+      "message": "确定删除 {count} 个视频文件吗？正在录制或正在上传的文件会跳过，此操作不可撤销。",
+      "confirm": "全部删除",
+      "done": "已删除 {count} 个文件",
+      "failed": "删除完成，{count} 个文件失败"
     },
     "otherClientDeleted": "其他客户端删除了录制文件：{name}",
     "segments": {
