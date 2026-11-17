@@ -9,7 +9,7 @@
     Initializes event listeners and loads the streamer list from backend on mount.
 -->
 <script setup lang="ts">
-	import { onMounted, ref } from "vue";
+	import { computed, onMounted, ref } from "vue";
 	import { useStreamersStore } from "../stores/streamers";
 	import type { StreamerEntry } from "../stores/streamers";
 	import { useNotify } from "../composables/useNotify";
@@ -27,6 +27,19 @@
 	const { t } = useI18n();
 	/** 是否显示添加主播对话框 / Whether to show the add streamer dialog */
 	const showAdd = ref(false);
+	/** 是否正在批量开始录制 / Whether bulk start is in progress */
+	const bulkStarting = ref(false);
+	/** 是否正在批量停止录制 / Whether bulk stop is in progress */
+	const bulkStopping = ref(false);
+
+	/** 可批量开始录制的主播（在线且可录制、当前未录制）/ Streamers eligible for bulk start */
+	const startAllTargets = computed(() =>
+		store.streamers.filter((s) => s.is_recordable && !s.is_recording),
+	);
+	/** 当前正在录制的主播 / Streamers eligible for bulk stop */
+	const stopAllTargets = computed(() =>
+		store.streamers.filter((s) => s.is_recording),
+	);
 
 	onMounted(async () => {
 		store.initListeners();
@@ -125,6 +138,104 @@
 			toast(String(e), "error");
 		}
 	}
+
+	/**
+	 * 一键开始所有可录制主播。逐个调用现有开始接口，避免低配 VPS 上同时发起过多请求。
+	 * Start every recordable streamer sequentially to avoid bursts on the low-resource VPS.
+	 */
+	async function handleStartAll() {
+		const targets = [...startAllTargets.value];
+		if (targets.length === 0) {
+			toast(t("home.bulkStart.none"), "info");
+			return;
+		}
+
+		bulkStarting.value = true;
+		let succeeded = 0;
+		const failed: string[] = [];
+		try {
+			for (const s of targets) {
+				try {
+					await store.startRecording(s.username);
+					succeeded++;
+				} catch {
+					failed.push(s.username);
+				}
+			}
+			await store.fetchStreamers();
+			toast(
+				t("home.bulkStart.done", {
+					success: succeeded,
+					total: targets.length,
+				}),
+				failed.length === 0 ? "success" : "warning",
+			);
+			if (failed.length > 0) {
+				toast(
+					t("home.bulkStart.failed", {
+						count: failed.length,
+						usernames: failed.join(", "),
+					}),
+					"error",
+				);
+			}
+		} finally {
+			bulkStarting.value = false;
+		}
+	}
+
+	/**
+	 * 一键停止所有正在录制的主播。逐个调用现有停止接口，并先确认危险操作。
+	 * Stop every recording sequentially after confirmation, reusing the existing stop path.
+	 */
+	async function handleStopAll() {
+		const targets = [...stopAllTargets.value];
+		if (targets.length === 0) {
+			toast(t("home.bulkStop.none"), "info");
+			return;
+		}
+
+		const ok = await confirm({
+			title: t("home.bulkStop.title"),
+			message: t("home.bulkStop.message", { count: targets.length }),
+			confirmText: t("home.bulkStop.confirm"),
+			danger: true,
+		});
+		if (!ok) return;
+
+		bulkStopping.value = true;
+		let succeeded = 0;
+		const failed: string[] = [];
+		try {
+			for (const s of targets) {
+				try {
+					await store.stopRecording(s.username);
+					succeeded++;
+				} catch {
+					failed.push(s.username);
+				}
+			}
+			await store.fetchStreamers();
+			toast(
+				t("home.bulkStop.done", {
+					success: succeeded,
+					total: targets.length,
+				}),
+				failed.length === 0 ? "success" : "warning",
+			);
+			if (failed.length > 0) {
+				toast(
+					t("home.bulkStop.failed", {
+						count: failed.length,
+						usernames: failed.join(", "),
+					}),
+					"error",
+				);
+			}
+		} finally {
+			bulkStopping.value = false;
+		}
+	}
 </script>
 
 <template>
@@ -137,7 +248,26 @@
 					{{ t("home.subtitle", { total: store.streamers.length, recording: store.streamers.filter((s) => s.is_recording).length }) }}
 				</p>
 			</div>
-			<Button class="shrink-0" @click="showAdd = true">{{ t("home.addStreamer") }}</Button>
+			<div v-if="store.streamers.length > 0" class="flex flex-wrap items-center gap-2 shrink-0">
+				<Button
+					variant="outline"
+					size="sm"
+					:disabled="startAllTargets.length === 0 || bulkStarting || bulkStopping"
+					@click="handleStartAll"
+				>
+					{{ t("home.startAll", { count: startAllTargets.length }) }}
+				</Button>
+				<Button
+					variant="destructive"
+					size="sm"
+					:disabled="stopAllTargets.length === 0 || bulkStarting || bulkStopping"
+					@click="handleStopAll"
+				>
+					{{ t("home.stopAll", { count: stopAllTargets.length }) }}
+				</Button>
+				<Button size="sm" @click="showAdd = true">{{ t("home.addStreamer") }}</Button>
+			</div>
+			<Button v-else class="shrink-0" @click="showAdd = true">{{ t("home.addStreamer") }}</Button>
 		</header>
 
 		<div
