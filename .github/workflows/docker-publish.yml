@@ -56,6 +56,29 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      # Export the built image as a file so it can be downloaded from the
+      # Actions page and imported through aaPanel's Docker Manager without
+      # needing to make the GHCR package public or log in on the VPS.
+      - name: Build image for file export
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          tags: stripchat-recorder:export
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Save image to a compressed tar file
+        run: docker save stripchat-recorder:export | gzip -1 > stripchat-recorder.tar.gz
+
+      - name: Upload image as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: stripchat-recorder-image
+          path: stripchat-recorder.tar.gz
+          retention-days: 7
+
   # Optional: ARM64 image (Oracle Ampere, Hetzner CAX, Raspberry Pi, ...).
   # Uses native ARM runners instead of slow QEMU emulation. Remove the
   # `if: false` line to enable. Public repos get these runners for free.
