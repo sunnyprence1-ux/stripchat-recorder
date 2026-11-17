@@ -30,3 +30,7 @@ build_tmp/
 # inside a crate directory creates a target/ next to it
 target/
 nohup.out
+
+# Python bytecode
+__pycache__/
+*.pyc

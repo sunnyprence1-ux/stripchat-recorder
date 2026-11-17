@@ -10,16 +10,18 @@ login or session migration is needed.
 """
 
 import asyncio
+import ipaddress
 import os
 import sqlite3
 import struct
 import sys
 import time
 import zlib
+from urllib.parse import urlsplit
 
 # WZGram reads several limits while its modules are imported, so set the
 # resource caps before importing it.
-os.environ.setdefault("WZGRAM_MAX_READ_AHEAD", "16")
+os.environ.setdefault("WZGRAM_MAX_READ_AHEAD", "32")
 os.environ.setdefault("WZGRAM_HANDLER_WORKERS", "2")
 os.environ.setdefault("WZGRAM_MAX_INFLIGHT_MEDIA", "6")
 os.environ.setdefault("WZGRAM_MAX_INFLIGHT_PACKETS", "16")
@@ -53,11 +55,64 @@ def _encode(raw: bytes) -> str:
     return "".join(result)
 
 
-def _session_string(dc_id: int, api_id: int, auth_key: bytes, address: str) -> str:
-    """Build a WZGram session string from a grammers auth key."""
+# Fallbacks match grammers' built-in DC options. Used only when a session row
+# has no usable address, which should never happen for a normal login.
+_KNOWN_DC_IPS = {
+    1: "149.154.175.53",
+    2: "149.154.167.41",
+    3: "149.154.175.100",
+    4: "149.154.167.92",
+    5: "91.108.56.100",
+}
+
+
+def _split_dc_address(address: str) -> tuple[str, int]:
+    """Split a grammers `dc_option.ipv4` value into (bare host, port).
+
+    grammers stores `SocketAddrV4::to_string()`, e.g. "149.154.167.41:443".
+    Pyrogram's session string instead takes the host and port as separate
+    fields. Passing the whole socket address as the host makes connect() fail
+    and would silently send every upload back through the Rust fallback.
+    """
+    value = (address or "").strip()
+    if not value:
+        return "", 443
+
+    # Already a bare IP address.
+    try:
+        return str(ipaddress.ip_address(value)), 443
+    except ValueError:
+        pass
+
+    # grammers IPv4: "1.2.3.4:443"; IPv6: "[2001:db8::1]:443".
+    host, sep, port_text = value.rpartition(":")
+    if sep and host:
+        candidate = host[1:-1] if host.startswith("[") and host.endswith("]") else host
+        try:
+            port = int(port_text)
+            if not 1 <= port <= 65535:
+                raise ValueError("port out of range")
+            return str(ipaddress.ip_address(candidate)), port
+        except ValueError:
+            pass
+
+    # Last resort: urlsplit understands bracketed IPv6 addresses.
+    try:
+        host = urlsplit("//" + value).hostname or ""
+        if host:
+            return host, 443
+    except ValueError:
+        pass
+    return value, 443
+
+
+def _session_string(
+    dc_id: int, api_id: int, auth_key: bytes, host: str, port: int
+) -> str:
+    """Build a WZGram session string from an existing grammers auth key."""
     if len(auth_key) != 256:
         raise ValueError(f"invalid grammers auth key length: {len(auth_key)}")
-    addr = address.encode("ascii")[:48].ljust(48, b"\0")
+    addr = host.encode("ascii")[:48].ljust(48, b"\0")
     packed = struct.pack(
         ">BBI?256sQ?H48s",
         3,          # WZ session-string version
@@ -67,7 +122,7 @@ def _session_string(dc_id: int, api_id: int, auth_key: bytes, address: str) -> s
         auth_key,
         1,          # placeholder user_id; replaced after get_me()
         False,      # is_bot; replaced after get_me()
-        443,
+        port,
         addr,
     )
     return "WZ_" + _encode(packed + struct.pack("<I", zlib.crc32(packed)))
@@ -92,7 +147,11 @@ def _read_grammers_session(path: str) -> tuple:
         if row is None or not row[2]:
             raise ValueError("grammers session has no auth_key")
         address = row[0] or row[1] or ""
-        return dc_id, bytes(row[2]), address
+        host, port = _split_dc_address(address)
+        if not host:
+            host = _KNOWN_DC_IPS.get(dc_id, _KNOWN_DC_IPS[2])
+            port = 443
+        return dc_id, bytes(row[2]), host, port
     finally:
         conn.close()
 
@@ -102,8 +161,12 @@ async def _run() -> None:
     api_id = int(os.environ["TG_API_ID"])
     session_path = os.environ["TG_SESSION_PATH"]
     proxy = os.environ.get("TG_PROXY", "").strip() or None
-    pool = max(4, min(8, int(os.environ.get("TG_WZGRAM_POOL", "8"))))
+    # Match WZGram's non-Premium default of 12 media sessions. Each session has
+    # two part workers, so 12 sessions keep up to 24 x 512 KiB parts in flight —
+    # exactly what Telegram recommends for a high-latency/WARP uplink.
+    pool = max(4, min(16, int(os.environ.get("TG_WZGRAM_POOL", "12"))))
     rate = max(64, int(os.environ.get("TG_WZGRAM_RATE", "1000")))
+    print(f"WZ_INFO:pool={pool} rate={rate}", flush=True)
 
     # save_file reads these at call time. A high rate removes WZGram's default
     # 32-parts/s pacing for non-premium accounts; the VPS uplink remains the cap.
@@ -122,8 +185,9 @@ async def _run() -> None:
 
     from wzgram import Client, raw
 
-    dc_id, auth_key, address = _read_grammers_session(session_path)
-    session_string = _session_string(dc_id, api_id, auth_key, address)
+    dc_id, auth_key, host, port = _read_grammers_session(session_path)
+    session_string = _session_string(dc_id, api_id, auth_key, host, port)
+    print(f"WZ_SESSION:dc={dc_id} host={host} port={port}", flush=True)
 
     client = Client(
         "wzgram-upload",
@@ -136,7 +200,10 @@ async def _run() -> None:
         skip_updates=True,
         timeout=60,
         sleep_threshold=0,
-        max_concurrent_transmissions=1,
+        # save_file opens its own media session pool; this semaphore only gates
+        # concurrent save_file() calls, so match the pool instead of leaving the
+        # default cap of 1.
+        max_concurrent_transmissions=pool,
         auto_no_updates=False,
     )
 

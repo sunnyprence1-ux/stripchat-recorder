@@ -15,6 +15,7 @@ RUN apt-get update && apt-get install -y \
     cmake \
     perl \
     libclang-dev \
+    python3 \
     && rm -rf /var/lib/apt/lists/*
 
 RUN curl -fsSL https://deb.nodesource.com/setup_lts.x | bash - && \
@@ -47,7 +48,8 @@ COPY . /app
 
 RUN . /root/.cargo/env && npm run build \
     && cargo test --manifest-path /app/modules/pp_utils/Cargo.toml --lib \
-    && cargo test --manifest-path /app/modules/notify_telegram/Cargo.toml --bin notify_telegram_v050
+    && cargo test --manifest-path /app/modules/notify_telegram/Cargo.toml --bin notify_telegram_v050 \
+    && python3 -m unittest discover -s /app/modules/notify_telegram/tests -p 'test_*.py'
 
 # ── Runtime image ──────────────────────────────────────────────────────────────
 FROM debian:latest

@@ -1989,13 +1989,34 @@ async fn upload_with_progress(
     ) as usize);
 
     let file_size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
-    if should_use_wzgram(parse_upload_engine(&param("upload_engine", "wzgram")), file_size) {
+    let engine = parse_upload_engine(&param("upload_engine", "wzgram"));
+    let use_wzgram = should_use_wzgram(engine, file_size);
+
+    // Make the chosen engine obvious in VPS logs. Previously a broken WZGram
+    // sidecar silently fell back to Rust, which made every upload look "slow"
+    // even though the fast path was never used.
+    if file_size >= BIG_FILE_THRESHOLD as u64 {
+        if use_wzgram {
+            eprintln!(
+                "UPLOAD_ENGINE: wzgram (file={} bytes, workers={})",
+                file_size, workers
+            );
+        } else {
+            eprintln!(
+                "UPLOAD_ENGINE: rust (file={} bytes, workers={}, requested={:?})",
+                file_size, workers, engine
+            );
+        }
+    }
+
+    if use_wzgram {
         let before = done.load(Ordering::Relaxed);
         match upload_via_wzgram(client, path, Arc::clone(&done), total, workers).await {
             Ok(uploaded) => return Ok(uploaded),
             Err(err) => {
                 // A failed sidecar may have reported partial progress. Rewind it so
                 // the Rust fallback does not double-count those bytes.
+                eprintln!("UPLOAD_ENGINE: rust (fallback from wzgram)");
                 eprintln!("WZGram upload failed: {}. falling back to Rust uploader", err);
                 done.store(before, Ordering::Relaxed);
             }
@@ -2050,7 +2071,11 @@ async fn upload_via_wzgram(
             "python3".to_string()
         }
     });
-    let pool = (workers / 2).clamp(4, 8);
+    // WZGram opens its own media-session pool; one session carries two part
+    // workers. The default upload_workers=16 therefore maps to 12 sessions,
+    // which matches WZGram's own non-Premium default and keeps enough parts in
+    // flight to hide WARP/Telegram round-trip latency.
+    let pool = workers.clamp(4, 12);
 
     let mut child = tokio::process::Command::new(&configured_python)
         .arg(&script)

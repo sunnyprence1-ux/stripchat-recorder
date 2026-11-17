@@ -236,7 +236,7 @@ Uploads are sent in **512KB parts with eight in flight**, instead of one part at
 whole speedup: the old loop waited for the server to acknowledge every part, so a 100MB video meant
 ~200 serial round trips, each one paying the full round-trip time.
 
-`upload_workers` (default **8**, max 16) tunes how many parts are in flight. Each part still retries
+`upload_workers` (default **16**, max 16) tunes how many parts are in flight. Each part still retries
 independently, so a dropped connection resumes from where it stopped instead of re-uploading the file.
 
 Measured through the real send path on a congested mobile uplink, same 12MB video, runs interleaved:

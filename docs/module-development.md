@@ -580,7 +580,7 @@ chmod +x ./data/modules/copy_to_dir
 | `cover_first` | boolean | `true`  | 是否先把封面图单独作为一条图片消息发出，再上传并发送视频。关闭后封面图和视频合在同一条相册消息里 |
 | `topic_per_model` | boolean | `true` | 按模特名自动创建/复用群组话题（Topic），视频发送到对应话题；群组需为论坛模式且 Bot 具备「管理话题」权限 |
 | `delete_after_send` | boolean | `true` | 发送成功后请求主程序删除本地数据（成片、分片目录、元数据、模块副产物），释放服务器空间 |
-| `upload_workers` | number | `8` | 内置上传器同时上传多少个 512KB 分块（上限 16，`0` = 默认）。串行上传要等每个分块回包，加速就来自这里 |
+| `upload_workers` | number | `16` | 内置上传器同时上传多少个 512KB 分块（上限 16，`0` = 默认）。串行上传要等每个分块回包，加速就来自这里 |
 
 #### 上传速度
 
