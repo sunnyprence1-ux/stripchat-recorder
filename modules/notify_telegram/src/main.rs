@@ -79,7 +79,7 @@ use grammers_client::sender::{ConnectionParams, SenderPool};
 use grammers_client::tl;
 use grammers_session::storages::SqliteSession;
 use grammers_session::types::{PeerAuth, PeerId, PeerKind, PeerRef};
-use tokio::io::{AsyncReadExt, AsyncSeekExt, SeekFrom};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncSeekExt, BufReader, SeekFrom};
 use pp_utils::{param, param_bool, format_duration, format_bytes, format_speed, parse_stem, find_cover, tmp_dir, image_dimensions, video_meta};
 
 /// 进度上报的缩放基数 / Progress reporting scale base
@@ -184,6 +184,13 @@ const DESCRIBE: &str = r#"{
         "label": "每个视频的并发上传分块数（默认 16，上限 16；0 = 默认）。高延迟代理/WARP 不要低于 8；每个 512KB 分块并发传输",
         "type": "number",
         "default": 16
+        },
+        {
+        "key": "upload_engine",
+        "label": "上传引擎（wzgram = WZGram 高速上传 / grammers = 内置 Rust 上传）。WZGram 复用已登录会话，失败时自动回退到 Rust",
+        "type": "select",
+        "default": "wzgram",
+        "options": ["wzgram", "grammers"]
         }
     ]
 }"#;
@@ -1631,6 +1638,31 @@ fn normalize_upload_workers(workers: usize) -> usize {
     }
 }
 
+/// 实际执行文件分块上传的引擎 / Engine that performs file-part uploads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UploadEngine {
+    /// WZGram (Pyrogram fork) sidecar, reusing the grammers auth key.
+    Wzgram,
+    /// Built-in Rust/grammers uploader (the previous behaviour).
+    Grammers,
+}
+
+/// 解析引擎参数；未知值回退到 WZGram（默认高速路径）。
+/// Parse the engine parameter; unknown values fall back to WZGram (the fast default).
+fn parse_upload_engine(value: &str) -> UploadEngine {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "grammers" | "rust" | "builtin" => UploadEngine::Grammers,
+        _ => UploadEngine::Wzgram,
+    }
+}
+
+/// 小文件跳过 WZGram：启动 Python 旁进程的成本比上传几十 KB 封面/缩略图更高。
+/// Small files stay on Rust: starting the Python sidecar costs more than uploading
+/// a tiny cover or thumbnail.
+fn should_use_wzgram(engine: UploadEngine, bytes: u64) -> bool {
+    engine == UploadEngine::Wzgram && bytes >= BIG_FILE_THRESHOLD as u64
+}
+
 /// 多线程共享的上传进度：汇总字节数，并按秒上报速度。
 /// Upload progress shared by every worker: aggregates the byte count and reports speed once a
 /// second.
@@ -1955,7 +1987,191 @@ async fn upload_with_progress(
         "upload_workers",
         DEFAULT_UPLOAD_WORKERS as u32,
     ) as usize);
+
+    let file_size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+    if should_use_wzgram(parse_upload_engine(&param("upload_engine", "wzgram")), file_size) {
+        let before = done.load(Ordering::Relaxed);
+        match upload_via_wzgram(client, path, Arc::clone(&done), total, workers).await {
+            Ok(uploaded) => return Ok(uploaded),
+            Err(err) => {
+                // A failed sidecar may have reported partial progress. Rewind it so
+                // the Rust fallback does not double-count those bytes.
+                eprintln!("WZGram upload failed: {}. falling back to Rust uploader", err);
+                done.store(before, Ordering::Relaxed);
+            }
+        }
+    }
+
     upload_with_workers(client, path, done, total, workers).await
+}
+
+/// 通过 WZGram 旁进程上传文件分块。
+///
+/// The Python sidecar imports the existing grammers auth key, uploads the file
+/// through WZGram and prints `WZ_BYTES:` / `WZ_RESULT:` lines. All Telegram
+/// sending logic stays in this Rust module; only the part upload is delegated.
+async fn upload_via_wzgram(
+    _client: &Client,
+    path: &Path,
+    done: Arc<AtomicUsize>,
+    total: usize,
+    workers: usize,
+) -> Result<Uploaded, String> {
+    let api_id: i32 = param("api_id", "")
+        .trim()
+        .parse()
+        .map_err(|_| "api_id is required for WZGram upload".to_string())?;
+    let mode = SessionMode::from_param(&param("account", "auto")).resolve(api_id);
+    let session_file = session_path(api_id, mode);
+    if !session_file.exists() {
+        return Err(format!(
+            "WZGram needs an existing grammers session at {} — sign in first",
+            session_file.display()
+        ));
+    }
+
+    let base_dir = env::var("PP_EXE_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            env::current_exe()
+                .ok()
+                .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+                .unwrap_or_else(|| PathBuf::from("."))
+        });
+    let script = base_dir.join("wzgram_upload.py");
+    if !script.is_file() {
+        return Err(format!("WZGram sidecar not found at {}", script.display()));
+    }
+
+    let configured_python = env::var("WZGRAM_PYTHON").unwrap_or_else(|_| {
+        if Path::new("/opt/wzgram-venv/bin/python").exists() {
+            "/opt/wzgram-venv/bin/python".to_string()
+        } else {
+            "python3".to_string()
+        }
+    });
+    let pool = (workers / 2).clamp(4, 8);
+
+    let mut child = tokio::process::Command::new(&configured_python)
+        .arg(&script)
+        .env("PYTHONUNBUFFERED", "1")
+        .env("TG_UPLOAD_PATH", path)
+        .env("TG_API_ID", api_id.to_string())
+        .env("TG_SESSION_PATH", &session_file)
+        .env("TG_PROXY", param("proxy", ""))
+        .env("TG_WZGRAM_POOL", pool.to_string())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .map_err(|e| format!("spawn WZGram sidecar: {}", e))?;
+
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| "WZGram sidecar has no stderr pipe".to_string())?;
+    let stderr_task = tokio::spawn(async move {
+        let mut reader = BufReader::new(stderr);
+        let mut line = String::new();
+        loop {
+            line.clear();
+            match reader.read_line(&mut line).await {
+                Ok(0) | Err(_) => break,
+                Ok(_) => eprintln!("[wzgram] {}", line.trim_end()),
+            }
+        }
+    });
+
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "WZGram sidecar has no stdout pipe".to_string())?;
+    let mut reader = BufReader::new(stdout);
+    let mut line = String::new();
+    let progress = UploadProgress::new(Arc::clone(&done), total);
+    let mut reported_bytes = 0usize;
+    let mut result: Option<(i64, i32, bool, String)> = None;
+    let mut sidecar_error = String::new();
+
+    loop {
+        line.clear();
+        match reader.read_line(&mut line).await {
+            Ok(0) => break,
+            Ok(_) => {}
+            Err(e) => return Err(format!("read WZGram sidecar stdout: {}", e)),
+        }
+        let trimmed = line.trim_end();
+        if let Some(value) = trimmed.strip_prefix("WZ_BYTES:") {
+            let bytes: usize = value
+                .parse()
+                .map_err(|_| format!("invalid WZ_BYTES value: {}", value))?;
+            if bytes > reported_bytes {
+                progress.add(bytes - reported_bytes);
+                reported_bytes = bytes;
+            }
+        } else if let Some(value) = trimmed.strip_prefix("WZ_RESULT:") {
+            let mut parts = value.split(':');
+            let id = parts
+                .next()
+                .and_then(|v| v.parse::<i64>().ok())
+                .ok_or_else(|| format!("invalid WZ_RESULT id: {}", value))?;
+            let total_parts = parts
+                .next()
+                .and_then(|v| v.parse::<i32>().ok())
+                .ok_or_else(|| format!("invalid WZ_RESULT parts: {}", value))?;
+            let is_big = parts.next() == Some("1");
+            let md5_checksum = parts.next().unwrap_or("").to_string();
+            result = Some((id, total_parts, is_big, md5_checksum));
+        } else if let Some(value) = trimmed.strip_prefix("WZ_ERROR:") {
+            sidecar_error = value.to_string();
+        } else if !trimmed.is_empty() {
+            eprintln!("[wzgram] {}", trimmed);
+        }
+    }
+
+    let status = child
+        .await
+        .map_err(|e| format!("wait for WZGram sidecar: {}", e))?;
+    let _ = stderr_task.await;
+
+    if !status.success() {
+        return Err(if sidecar_error.is_empty() {
+            format!("WZGram sidecar exited with {}", status)
+        } else {
+            sidecar_error
+        });
+    }
+    if !sidecar_error.is_empty() {
+        return Err(sidecar_error);
+    }
+    let (file_id, total_parts, is_big, md5_checksum) = result
+        .ok_or_else(|| "WZGram sidecar produced no WZ_RESULT line".to_string())?;
+
+    let size = tokio::fs::metadata(path)
+        .await
+        .map_err(|e| format!("metadata {} failed: {}", path.display(), e))?
+        .len() as usize;
+    if reported_bytes < size {
+        progress.add(size - reported_bytes);
+    }
+
+    let name = path.file_name().unwrap().to_string_lossy().to_string();
+    Ok(Uploaded::from_raw(if is_big {
+        tl::types::InputFileBig {
+            id: file_id,
+            parts: total_parts,
+            name,
+        }
+        .into()
+    } else {
+        tl::types::InputFile {
+            id: file_id,
+            parts: total_parts,
+            name,
+            md5_checksum,
+        }
+        .into()
+    }))
 }
 
 /// 与 [`upload_with_progress`] 相同，但可以指定并发分块数（1 = 旧的串行行为）。
@@ -3495,6 +3711,24 @@ mod tests {
         assert!(b > 0 && c > 0);
         assert_ne!(a, b, "two uploads must not share a file_id");
         assert_ne!(a, c, "different paths must not share a file_id");
+    }
+
+    #[test]
+    fn upload_engine_defaults_to_wzgram() {
+        assert_eq!(parse_upload_engine("wzgram"), UploadEngine::Wzgram);
+        assert_eq!(parse_upload_engine(""), UploadEngine::Wzgram);
+        assert_eq!(parse_upload_engine("unknown"), UploadEngine::Wzgram);
+        assert_eq!(parse_upload_engine("GRAMMERS"), UploadEngine::Grammers);
+        assert_eq!(parse_upload_engine(" rust "), UploadEngine::Grammers);
+        assert!(!should_use_wzgram(UploadEngine::Wzgram, 1024));
+        assert!(should_use_wzgram(
+            UploadEngine::Wzgram,
+            BIG_FILE_THRESHOLD as u64
+        ));
+        assert!(!should_use_wzgram(
+            UploadEngine::Grammers,
+            BIG_FILE_THRESHOLD as u64
+        ));
     }
 
     #[test]

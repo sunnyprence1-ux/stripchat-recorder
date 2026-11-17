@@ -43,6 +43,9 @@
     },
     "upload_workers": {
       "label": "Concurrent upload parts (default 8, max 16; 0 = default). Serial uploads wait for the server to acknowledge every 512KB part; running several at once overlaps those round trips — a 12MB video measured ~1.8x faster (the uplink itself is the ceiling)"
+    },
+    "upload_engine": {
+      "label": "Upload engine (wzgram = fast WZGram uploader / grammers = built-in Rust uploader). WZGram reuses the signed-in session and falls back to Rust on failure"
     }
   }
 }

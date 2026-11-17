@@ -13,7 +13,7 @@ grammers-client   = { version = "0.9", features = ["proxy", "fs"] }
 grammers-session  = { version = "0.9", features = ["sqlite-storage"] }
 grammers-mtsender = { version = "0.9", features = ["proxy"] }
 futures  = "0.3"
-tokio    = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time", "io-std", "io-util"] }
+tokio    = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time", "io-std", "io-util", "process"] }
 dirs = "6"
 md5 = "0.8"
 

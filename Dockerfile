@@ -62,7 +62,19 @@ RUN apt-get update && apt-get install -y \
     ffmpeg \
     ca-certificates \
     libssl3 \
+    python3 \
+    python3-venv \
+    python3-pip \
     && rm -rf /var/lib/apt/lists/*
+
+# WZGram is installed only in the CI-built image. The VPS never builds Python wheels.
+RUN python3 -m venv /opt/wzgram-venv \
+    && /opt/wzgram-venv/bin/pip install --no-cache-dir --upgrade pip \
+    && /opt/wzgram-venv/bin/pip install --no-cache-dir \
+        "wzgram==3.1.7" \
+        "warpcrypto==2.1.0" \
+        "python-socks[asyncio]==3.2.1" \
+        "aiosqlite==0.22.1"
 
 RUN mkdir -p /app/stripchat-recorder/logs \
              /app/stripchat-recorder/recordings \
@@ -73,8 +85,13 @@ WORKDIR /app
 
 COPY --from=builder /app/build/stripchat-recorder /app/stripchat-recorder/
 COPY --from=builder /app/build/modules/ /app/stripchat-recorder/modules.default/
+COPY modules/notify_telegram/wzgram_upload.py /app/stripchat-recorder/wzgram_upload.py
 
-RUN chmod +x /app/stripchat-recorder/stripchat-recorder
+RUN chmod +x /app/stripchat-recorder/stripchat-recorder \
+    && chmod 0644 /app/stripchat-recorder/wzgram_upload.py \
+    && python3 -m py_compile /app/stripchat-recorder/wzgram_upload.py
+
+ENV WZGRAM_PYTHON=/opt/wzgram-venv/bin/python
 
 RUN printf '%s\n' \
     '#!/bin/sh' \
