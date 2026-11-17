@@ -477,6 +477,10 @@ pub fn emit_progress_step(step: u32, total_steps: u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    // PP_SIDECAR_DIR is global process state; serialize every test that reads or writes it.
+    static SIDECAR_ENV_LOCK: Mutex<()> = Mutex::new(());
 
     /// 在指定目录下创建一个空文件 / Create an empty file inside `dir`
     fn touch(dir: &Path, name: &str) -> PathBuf {
@@ -505,6 +509,7 @@ mod tests {
     /// The cover normally sits beside the video: it must still be found in the flat layout.
     #[test]
     fn cover_beside_the_video_is_found() {
+        let _guard = SIDECAR_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = temp_dir("beside");
         let video = touch(&dir, "alice_20260101_000000.mp4");
         let cover = touch(&dir, "alice_20260101_000000.webp");
@@ -516,6 +521,7 @@ mod tests {
     /// dir, and it must still be found.
     #[test]
     fn cover_in_the_sidecar_dir_is_found() {
+        let _guard = SIDECAR_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let root = temp_dir("sidecar");
         let final_dir = root.join("final");
         let sidecar = root.join("recordings");
@@ -534,6 +540,7 @@ mod tests {
     /// 视频同目录优先于副产物目录 / The video's own directory wins over the sidecar dir
     #[test]
     fn the_video_directory_wins_when_both_have_a_cover() {
+        let _guard = SIDECAR_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let root = temp_dir("both");
         let final_dir = root.join("final");
         let sidecar = root.join("recordings");
@@ -554,6 +561,7 @@ mod tests {
     /// No cover anywhere means None — never a path that does not exist.
     #[test]
     fn missing_cover_is_none() {
+        let _guard = SIDECAR_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = temp_dir("missing");
         let video = touch(&dir, "alice_20260101_000000.mp4");
         assert_eq!(find_cover(&video), None);
@@ -562,6 +570,7 @@ mod tests {
     /// 空白的 PP_SIDECAR_DIR 视为未设置 / A blank PP_SIDECAR_DIR counts as unset
     #[test]
     fn blank_sidecar_dir_is_ignored() {
+        let _guard = SIDECAR_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // SAFETY: 只有这个测试改 PP_SIDECAR_DIR
         // SAFETY: only this test mutates PP_SIDECAR_DIR
         unsafe { env::set_var("PP_SIDECAR_DIR", "   ") };
