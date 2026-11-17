@@ -131,7 +131,13 @@ fn packet_timeline_duration(csv: &str) -> Option<f64> {
 /// Query a single numeric ffprobe field and return the largest positive value.
 fn ffprobe_duration(input: &Path, args: &[&str]) -> Option<f64> {
     let output = ffprobe_stdout(input, args)?;
-    output.lines().filter_map(positive_f64).max()
+    let mut max_duration = 0.0_f64;
+    for line in output.lines() {
+        if let Some(value) = positive_f64(line) {
+            max_duration = max_duration.max(value);
+        }
+    }
+    if max_duration > 0.0 { Some(max_duration) } else { None }
 }
 
 /// 使用 ffprobe 获取视频文件的时长（秒），带回退探测。
