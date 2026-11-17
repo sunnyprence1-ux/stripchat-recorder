@@ -4,7 +4,7 @@
 //! Provides recording file list queries, merge status queries, and file deletion.
 //! These functions are called directly by the HTTP server handlers in server_mod/server.rs.
 
-use crate::config::settings::AppState;
+use crate::config::settings::{exe_dir, AppState};
 use crate::core::error::Result;
 use crate::recording::recorder::RecorderManager;
 use std::collections::HashSet;
@@ -321,10 +321,10 @@ fn is_safe_clean_root(root: &Path) -> bool {
         "/", "/tmp", "/var", "/etc", "/home", "/root", "/sdcard", "/storage", "/proc",
         "/sys", "/dev",
     ];
-    if unsafe_roots.iter().any(|u| lowered == *u) {
+    if unsafe_roots.iter().any(|u| lowered.as_str() == *u) {
         return false;
     }
-    let exe = canonical_lossy(&AppState::exe_dir());
+    let exe = canonical_lossy(&exe_dir());
     if r == exe || exe.starts_with(&r) {
         return false;
     }
@@ -443,10 +443,10 @@ pub fn clean_all_inner(
         state.tg_task_cancel(&key);
     }
 
-    let mut roots = vec![
+    let mut roots: Vec<PathBuf> = vec![
         PathBuf::from(&settings.output_dir),
         settings.videos_root(),
-        AppState::exe_dir().join("tmp"),
+        exe_dir().join("tmp"),
     ];
     let mut seen = HashSet::new();
     roots.retain(|root| root.exists() && seen.insert(canonical_lossy(root)));
