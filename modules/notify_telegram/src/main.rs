@@ -181,7 +181,7 @@ const DESCRIBE: &str = r#"{
         },
         {
         "key": "upload_workers",
-        "label": "每个视频的并发上传分块数（默认 16，上限 16；0 = 默认）。每个 512KB 分块并发传输，16 线程满速上传",
+        "label": "每个视频的并发上传分块数（默认 16，上限 16；0 = 默认）。高延迟代理/WARP 不要低于 8；每个 512KB 分块并发传输",
         "type": "number",
         "default": 16
         }
@@ -649,6 +649,39 @@ async fn list_all_topics(client: &Client, peer: &PeerRef) -> Result<Vec<(String,
     Ok(found)
 }
 
+/// 用话题标题过滤服务端话题，缓存未命中时避免为了找一个话题翻完 20 页。
+///
+/// Search server-side topics by title so a cache miss does not need to page through all
+/// 20 pages just to find one topic. Returns the exact (case-insensitive) match only.
+async fn find_topic_by_query(
+    client: &Client,
+    peer: &PeerRef,
+    title: &str,
+) -> Result<Option<i32>, String> {
+    let result = client
+        .invoke(&tl::functions::messages::GetForumTopics {
+            peer: (*peer).into(),
+            q: Some(title.to_string()),
+            offset_date: 0,
+            offset_id: 0,
+            offset_topic: 0,
+            limit: 100,
+        })
+        .await
+        .map_err(|e| format!("getForumTopics(query) failed: {}", e))?;
+
+    let tl::enums::messages::ForumTopics::Topics(topics) = result;
+    Ok(topics
+        .topics
+        .iter()
+        .filter_map(|topic| match topic {
+            tl::enums::ForumTopic::Topic(t) => Some((t.title.trim(), t.id)),
+            _ => None,
+        })
+        .find(|(t, _)| t.eq_ignore_ascii_case(title.trim()))
+        .map(|(_, id)| id))
+}
+
 /// 在群组中创建论坛话题，返回新话题 ID。
 /// Create a forum topic in the group and return its id.
 async fn create_topic(
@@ -722,9 +755,20 @@ async fn ensure_topic(
     let title = topic_title(model_name);
 
     if can_list {
-        // 用户账号可以列出全部话题：用服务端结果刷新缓存后再查找，避免重复创建
-        // User accounts can list every topic: refresh the cache from the server before
-        // looking the topic up, so no duplicate is created
+        // 先按标题做一次服务端过滤查询，绝大多数缓存未命中只需 1 个 RPC。
+        // Only one filtered RPC for the common cache-miss case; fall back to the full list.
+        match find_topic_by_query(client, &target.peer, &title).await {
+            Ok(Some(id)) => {
+                update_topic_cache(chat_id, model_name, Some(id));
+                println!("topic: reusing \"{}\" (id {})", title, id);
+                return Ok(id);
+            }
+            Ok(None) => {}
+            Err(e) => eprintln!("topic: filtered topic lookup failed ({}), listing all topics", e),
+        }
+
+        // 过滤查询没命中时再列出全部话题：刷新缓存并避免重复创建。
+        // Fall back to listing every topic: refresh the cache so no duplicate is created.
         match list_all_topics(client, &target.peer).await {
             Ok(all) => {
                 replace_chat_topics(chat_id, &all);
@@ -1567,6 +1611,14 @@ const DEFAULT_UPLOAD_WORKERS: usize = 16;
 /// 并发分块数的上限（再高只会更快触发限流）/ Upper bound (beyond this only flood-waits grow)
 const MAX_UPLOAD_WORKERS: usize = 16;
 
+/// 进度上报的最小间隔：避免每个 512KB 分块都刷新一次前端事件。
+/// Minimum interval between progress lines: avoid one frontend event per 512KB part.
+const PROGRESS_INTERVAL: Duration = Duration::from_millis(250);
+
+/// RPC 要求等待时的上限（秒），防止异常错误让进程挂一天。
+/// Cap for server-requested waits, so an abnormal error cannot stall the process for a day.
+const MAX_RPC_WAIT_SECS: u64 = 3600;
+
 /// 归一化并发分块数：0 表示自动（默认值），超过上限则截断。
 ///
 /// Normalize the concurrent part count: 0 means automatic (the default), anything above the
@@ -1596,6 +1648,20 @@ struct UploadProgress {
 struct SpeedWindow {
     bytes: usize,
     start: Instant,
+    /// 上一次真正输出进度的时间与百分比 / Last emitted progress time and percentage
+    last_progress: Instant,
+    last_scaled: usize,
+}
+
+/// 是否需要输出一条进度：百分比前进了，且距上次至少 `PROGRESS_INTERVAL`，或已完成。
+/// Whether a progress line is due: the percentage moved and enough time passed, or it is final.
+fn should_report_progress(
+    scaled: usize,
+    last_scaled: usize,
+    elapsed: Duration,
+    is_final: bool,
+) -> bool {
+    scaled > last_scaled && (is_final || elapsed >= PROGRESS_INTERVAL)
 }
 
 impl UploadProgress {
@@ -1603,41 +1669,67 @@ impl UploadProgress {
         Self {
             done,
             total,
-            window: Mutex::new(SpeedWindow { bytes: 0, start: Instant::now() }),
+            window: Mutex::new(SpeedWindow {
+                bytes: 0,
+                start: Instant::now(),
+                last_progress: Instant::now(),
+                last_scaled: 0,
+            }),
         }
     }
 
     /// 记录一个分块上传完成 / Record that one part finished uploading.
     fn add(&self, bytes: usize) {
-        if self.total == 0 {
+        if self.total == 0 || bytes == 0 {
             return;
         }
         let new_done = self.done.fetch_add(bytes, Ordering::Relaxed) + bytes;
         let scaled = ((new_done as u128) * (PROGRESS_SCALE as u128) / (self.total as u128))
             .min(PROGRESS_SCALE as u128) as usize;
-        println!("PROGRESS:{}/{}", scaled, PROGRESS_SCALE);
-        let _ = std::io::stdout().flush();
+        let is_final = scaled >= PROGRESS_SCALE;
 
-        // 速度每秒上报一次；锁内只做算术，不会阻塞其他 worker 上传
-        // Report the speed once a second; only arithmetic happens under the lock, so no worker
-        // is ever blocked from uploading
-        let bps = {
+        // 锁内只做算术；进度行最多每 250ms 一条，速度仍每秒一条。
+        // Only arithmetic under the lock; progress at most every 250ms, speed still once a second.
+        let (report_progress, bps) = {
             let mut w = self.window.lock().unwrap_or_else(|e| e.into_inner());
             w.bytes += bytes;
-            let elapsed = w.start.elapsed();
-            if elapsed >= Duration::from_secs(1) {
-                let bps = w.bytes as f64 / elapsed.as_secs_f64();
+            let speed_elapsed = w.start.elapsed();
+            let bps = if speed_elapsed >= Duration::from_secs(1) {
+                let bps = w.bytes as f64 / speed_elapsed.as_secs_f64();
                 w.bytes = 0;
                 w.start = Instant::now();
                 Some(bps)
             } else {
                 None
+            };
+
+            let report = should_report_progress(
+                scaled,
+                w.last_scaled,
+                w.last_progress.elapsed(),
+                is_final,
+            );
+            if report {
+                w.last_scaled = scaled;
+                w.last_progress = Instant::now();
             }
+            (report, bps)
         };
-        if let Some(bps) = bps {
-            println!("STATUS:{}", format_speed(bps));
-            let _ = std::io::stdout().flush();
+
+        if !report_progress && bps.is_none() {
+            return;
         }
+        // 一次 flush 写出所有到期行，减少热路径上的系统调用。
+        // Flush all due lines in one syscall instead of one per line.
+        let mut lines = String::new();
+        if report_progress {
+            lines.push_str(&format!("PROGRESS:{}/{}\n", scaled, PROGRESS_SCALE));
+        }
+        if let Some(bps) = bps {
+            lines.push_str(&format!("STATUS:{}\n", format_speed(bps)));
+        }
+        print!("{}", lines);
+        let _ = std::io::stdout().flush();
     }
 }
 
@@ -1662,14 +1754,65 @@ async fn md5_of_file(path: &Path) -> Result<String, String> {
     Ok(format!("{:x}", ctx.finalize()))
 }
 
-/// 从 RPC 错误里取出 FLOOD_WAIT 的秒数，其他错误返回 `None`。
-/// Extract the FLOOD_WAIT delay in seconds from an RPC error, `None` for anything else.
-fn flood_wait_secs(err: &InvocationError) -> Option<u64> {
-    match err {
-        InvocationError::Rpc(rpc) if rpc.name == "FLOOD_WAIT" => {
-            rpc.value.map(|secs| (secs as u64).clamp(1, 600))
+/// 从 RPC 错误名/值中解析 Telegram 要求的等待秒数。
+///
+/// Telegram 可能返回 `FLOOD_WAIT_42`、`FLOOD_WAIT_X`（值在 value 字段）或
+/// 非会员上传限速的 `FLOOD_PREMIUM_WAIT_3600`。旧代码只认识精确的 `FLOOD_WAIT`，
+/// 因此常见的带秒数错误会退化成固定退避，导致长时间空等或过早重试。
+///
+/// Parse the server-requested delay from an RPC error name/value. Telegram may return
+/// `FLOOD_WAIT_42`, `FLOOD_WAIT_X` (seconds in the value field), or the non-Premium upload
+/// limit `FLOOD_PREMIUM_WAIT_3600`. The old code only matched the exact `FLOOD_WAIT`.
+fn wait_secs_from_rpc_name(name: &str, value: Option<i32>) -> Option<u64> {
+    for prefix in ["FLOOD_PREMIUM_WAIT", "FLOOD_WAIT"] {
+        let Some(rest) = name.strip_prefix(prefix) else {
+            continue;
+        };
+        let digits = rest.trim_start_matches('_');
+        if !digits.is_empty()
+            && digits.bytes().all(|b| b.is_ascii_digit())
+            && let Ok(secs) = digits.parse::<u64>()
+        {
+            return Some(secs.clamp(1, MAX_RPC_WAIT_SECS));
         }
+        if rest.is_empty() || rest.eq_ignore_ascii_case("_X") {
+            return value.map(|secs| (secs as u64).clamp(1, MAX_RPC_WAIT_SECS));
+        }
+    }
+    None
+}
+
+/// 从 `InvocationError` 中取出服务器要求的等待秒数。
+/// Extract the server-requested wait from an `InvocationError`.
+fn rpc_wait_secs(err: &InvocationError) -> Option<u64> {
+    match err {
+        InvocationError::Rpc(rpc) => wait_secs_from_rpc_name(&rpc.name, rpc.value),
         _ => None,
+    }
+}
+
+/// 通用重试退避：第 N 次失败取 `delays[N]`，超出序列就重复最后一个值。
+/// Generic retry backoff: the Nth failure uses `delays[N]`, then repeats the last value.
+fn backoff_secs(attempt: u32, delays: &[u64]) -> u64 {
+    delays[(attempt as usize).min(delays.len() - 1)]
+}
+
+/// 一个已构造好的分块 RPC。请求只构造一次，重试时重复借用同一个对象，
+/// 不再为每次尝试克隆 512KB 的 `Vec<u8>`。
+///
+/// A pre-built part RPC. The request is built once and every retry borrows the same object,
+/// avoiding a 512KB `Vec<u8>` clone per attempt.
+enum UploadPartRequest {
+    Big(tl::functions::upload::SaveBigFilePart),
+    Small(tl::functions::upload::SaveFilePart),
+}
+
+impl UploadPartRequest {
+    async fn invoke(&self, client: &Client) -> Result<bool, InvocationError> {
+        match self {
+            Self::Big(req) => client.invoke(req).await,
+            Self::Small(req) => client.invoke(req).await,
+        }
     }
 }
 
@@ -1690,58 +1833,39 @@ async fn upload_one_part(
     // 通用错误的退避序列（秒）/ Backoff sequence for generic errors (seconds)
     const BACKOFF: [u64; 6] = [2, 4, 8, 15, 30, 60];
 
+    let request = if is_big {
+        UploadPartRequest::Big(tl::functions::upload::SaveBigFilePart {
+            file_id,
+            file_part: part,
+            file_total_parts: total_parts,
+            bytes: chunk,
+        })
+    } else {
+        UploadPartRequest::Small(tl::functions::upload::SaveFilePart {
+            file_id,
+            file_part: part,
+            bytes: chunk,
+        })
+    };
+
     let mut attempt = 0u32;
     loop {
-        let result = if is_big {
-            client
-                .invoke(&tl::functions::upload::SaveBigFilePart {
-                    file_id,
-                    file_part: part,
-                    file_total_parts: total_parts,
-                    bytes: chunk.clone(),
-                })
-                .await
-        } else {
-            client
-                .invoke(&tl::functions::upload::SaveFilePart {
-                    file_id,
-                    file_part: part,
-                    bytes: chunk.clone(),
-                })
-                .await
-        };
-
-        let err = match result {
+        let (err, server_wait) = match request.invoke(client).await {
             Ok(true) => return Ok(()),
-            Ok(false) => format!("server rejected part {}", part),
+            Ok(false) => ("server rejected part".to_string(), None),
             Err(e) => {
-                // FLOOD_WAIT 自带明确秒数，按服务器要求等待；其余按退避序列
-                // FLOOD_WAIT carries the exact delay, so honour it; otherwise back off
-                let delay = flood_wait_secs(&e)
-                    .unwrap_or_else(|| BACKOFF[(attempt as usize).min(BACKOFF.len() - 1)]);
-                attempt += 1;
-                if attempt >= MAX_ATTEMPTS {
-                    return Err(format!("part {} upload error: {}", part, e));
-                }
-                eprintln!(
-                    "chunk {}/{} attempt {}/{}: {}. retrying in {}s…",
-                    part + 1,
-                    total_parts,
-                    attempt,
-                    MAX_ATTEMPTS,
-                    e,
-                    delay
-                );
-                tokio::time::sleep(Duration::from_secs(delay)).await;
-                continue;
+                let wait = rpc_wait_secs(&e);
+                (e.to_string(), wait)
             }
         };
 
         attempt += 1;
         if attempt >= MAX_ATTEMPTS {
-            return Err(err);
+            return Err(format!("part {} upload error: {}", part, err));
         }
-        let delay = BACKOFF[(attempt as usize - 1).min(BACKOFF.len() - 1)];
+        // 服务器明确要求等待时优先按它给出的秒数，避免过早重试。
+        // Prefer the server's explicit delay when present so we never retry too early.
+        let delay = server_wait.unwrap_or_else(|| backoff_secs(attempt - 1, &BACKOFF));
         eprintln!(
             "chunk {}/{} attempt {}/{}: {}. retrying in {}s…",
             part + 1,
@@ -1812,14 +1936,14 @@ async fn upload_parts(
 /// 上传文件到 Telegram：并发分块、断点续传、进度上报。
 ///
 /// 旧实现一次只发一个分块，吞吐量被往返时延锁死：每个 512KB 分块都要等服务器回包，
-/// 一个 100MB 的文件就是约 200 次串行往返。现在默认并发上传 8 个分块，把这些往返重叠起来；
+/// 一个 100MB 的文件就是约 200 次串行往返。现在默认并发上传 16 个分块，把这些往返重叠起来；
 /// 每个分块仍然独立重试，因此断点续传的语义完全不变。
 ///
 /// Upload a file to Telegram with concurrent parts, resumable retries and progress reporting.
 ///
 /// The old implementation sent one part at a time, so throughput was pinned to the round-trip
 /// time: every 512KB part waited for the server's acknowledgement, which meant roughly 200
-/// serial round trips for a 100MB file. Eight parts are uploaded concurrently by default so
+/// serial round trips for a 100MB file. Sixteen parts are uploaded concurrently by default so
 /// those round trips overlap. Each part still retries on its own, so resumability is unchanged.
 async fn upload_with_progress(
     client: &Client,
@@ -2011,24 +2135,28 @@ async fn commit_media(
     raw_media: tl::enums::InputMedia,
 ) -> Result<grammers_client::media::Media, String> {
     const MAX_RETRIES: u32 = 10;
-    const DELAYS: [u64; 5] = [5, 10, 20, 40, 60];
+    // 固定 5/10/20s 起步会让一次瞬时错误凭空多等 5 秒；改成指数退避。
+    // A fixed 5/10/20s start added needless latency to transient errors; use exponential backoff.
+    const DELAYS: [u64; 6] = [1, 2, 4, 8, 15, 30];
     let mut attempt = 0u32;
     loop {
-        match client.invoke(&tl::functions::messages::UploadMedia {
+        let result = client.invoke(&tl::functions::messages::UploadMedia {
             business_connection_id: None,
             peer: (*peer).into(),
             media: raw_media.clone(),
-        }).await {
+        }).await;
+        match result {
             Ok(committed) => {
                 return grammers_client::media::Media::from_raw(committed)
                     .ok_or_else(|| "UploadMedia returned unrecognized media type".to_string());
             }
             Err(e) => {
+                let server_wait = rpc_wait_secs(&e);
                 attempt += 1;
                 if attempt >= MAX_RETRIES {
                     return Err(format!("UploadMedia failed after {} attempts: {}", attempt, e));
                 }
-                let delay = DELAYS[(attempt as usize - 1).min(DELAYS.len() - 1)];
+                let delay = server_wait.unwrap_or_else(|| backoff_secs(attempt - 1, &DELAYS));
                 eprintln!("UploadMedia attempt {}/{} failed: {}. retrying in {}s…",
                     attempt, MAX_RETRIES, e, delay);
                 tokio::time::sleep(Duration::from_secs(delay)).await;
@@ -2237,13 +2365,19 @@ async fn upload_and_send(
             async move {
                 let mut parts: Vec<CommittedPart> = Vec::new();
                 for (part_path, meta) in effective_parts.iter().zip(part_metas.iter()) {
-                    let thumb_uploaded = if let Some(ref tp) = meta.thumb_path {
-                        let t = upload_with_progress(client, tp, Arc::clone(&done), upload_total).await;
-                        let _ = fs::remove_file(tp);
-                        Some(t?)
-                    } else { None };
-
-                    let video_uploaded = upload_with_progress(client, part_path, Arc::clone(&done), upload_total).await?;
+                    // 缩略图很小：与视频上传并行，省掉一次串行 RPC 往返。
+                    // The thumbnail is tiny; upload it alongside the video to save one RTT.
+                    let thumb_fut = async {
+                        if let Some(tp) = meta.thumb_path.as_ref() {
+                            let t = upload_with_progress(client, tp, Arc::clone(&done), upload_total).await;
+                            let _ = fs::remove_file(tp);
+                            t.map(Some)
+                        } else {
+                            Ok::<Option<Uploaded>, String>(None)
+                        }
+                    };
+                    let video_fut = upload_with_progress(client, part_path, Arc::clone(&done), upload_total);
+                    let (thumb_uploaded, video_uploaded) = tokio::try_join!(thumb_fut, video_fut)?;
 
                     // 直接构建 InputMediaUploadedDocument，避免访问私有字段
                     // Build InputMediaUploadedDocument directly to avoid accessing private fields
@@ -2788,12 +2922,17 @@ async fn self_test(cfg: &TgConfig) -> Result<(), String> {
         }
 
         println!("[5/5] uploading {} ({})…", clip.display(), format_bytes(size as u64));
-        let thumb_uploaded = match thumb_path.as_ref() {
-            Some(tp) => Some(upload_with_progress(&client, tp, Arc::clone(&done), total).await?),
-            None => None,
+        let thumb_fut = async {
+            match thumb_path.as_ref() {
+                Some(tp) => {
+                    let t = upload_with_progress(&client, tp, Arc::clone(&done), total).await;
+                    t.map(Some)
+                }
+                None => Ok::<Option<Uploaded>, String>(None),
+            }
         };
-        let video_uploaded =
-            upload_with_progress(&client, &clip, Arc::clone(&done), total).await?;
+        let video_fut = upload_with_progress(&client, &clip, Arc::clone(&done), total);
+        let (thumb_uploaded, video_uploaded) = tokio::try_join!(thumb_fut, video_fut)?;
 
         println!("      upload finished, committing media…");
         let raw_media: tl::enums::InputMedia = tl::types::InputMediaUploadedDocument {
@@ -3547,6 +3686,45 @@ mod tests {
         assert_eq!(normalize_upload_workers(8), 8);
         assert_eq!(normalize_upload_workers(16), 16);
         assert_eq!(normalize_upload_workers(999), MAX_UPLOAD_WORKERS);
+    }
+
+    /// 进度行必须节流：同一百分比不重复上报，间隔内不重复上报，完成时立即上报。
+    /// Progress must be throttled: no duplicate percentages, no bursts, immediate final line.
+    #[test]
+    fn progress_reporting_is_throttled() {
+        assert!(should_report_progress(120, 0, Duration::from_secs(1), false));
+        assert!(!should_report_progress(120, 120, Duration::from_secs(1), false));
+        assert!(!should_report_progress(130, 120, Duration::from_millis(10), false));
+        assert!(should_report_progress(130, 120, PROGRESS_INTERVAL, false));
+        // 100MB 文件会在 250ms 内完成很多分块；最终 100% 不应被节流吞掉。
+        // Many parts can finish within 250ms; the final 100% line must still be emitted.
+        assert!(should_report_progress(PROGRESS_SCALE, 9900, Duration::ZERO, true));
+    }
+
+    /// Telegram 的 flood-wait 错误形式很多，必须全部解析成秒数。
+    /// All common flood-wait error shapes must be parsed into seconds.
+    #[test]
+    fn rpc_wait_errors_are_parsed() {
+        assert_eq!(wait_secs_from_rpc_name("FLOOD_WAIT_42", None), Some(42));
+        assert_eq!(wait_secs_from_rpc_name("FLOOD_WAIT_X", Some(15)), Some(15));
+        assert_eq!(wait_secs_from_rpc_name("FLOOD_PREMIUM_WAIT_90", None), Some(90));
+        assert_eq!(wait_secs_from_rpc_name("FLOOD_PREMIUM_WAIT_X", Some(7)), Some(7));
+        assert_eq!(wait_secs_from_rpc_name("FLOOD_WAIT_0", None), Some(1));
+        assert_eq!(
+            wait_secs_from_rpc_name("FLOOD_WAIT_999999", None),
+            Some(MAX_RPC_WAIT_SECS)
+        );
+        assert_eq!(wait_secs_from_rpc_name("CHANNEL_INVALID", Some(3)), None);
+    }
+
+    /// 通用退避序列：第一次失败用第一个值，超出后重复最后一个值。
+    /// Generic backoff: first failure uses the first value, then repeats the last one.
+    #[test]
+    fn retry_backoff_uses_sequence() {
+        let delays = [1u64, 2, 4, 8, 15, 30];
+        assert_eq!(backoff_secs(0, &delays), 1);
+        assert_eq!(backoff_secs(3, &delays), 8);
+        assert_eq!(backoff_secs(99, &delays), 30);
     }
 
     /// 默认只上传视频、不带任何文字：`send_caption` 必须存在且默认关闭。

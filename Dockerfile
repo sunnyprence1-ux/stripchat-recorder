@@ -45,7 +45,9 @@ RUN mkdir -vp ${CARGO_HOME:-$HOME/.cargo} && \
 WORKDIR /app
 COPY . /app
 
-RUN . /root/.cargo/env && npm run build && cargo test --manifest-path /app/modules/pp_utils/Cargo.toml --lib
+RUN . /root/.cargo/env && npm run build \
+    && cargo test --manifest-path /app/modules/pp_utils/Cargo.toml --lib \
+    && cargo test --manifest-path /app/modules/notify_telegram/Cargo.toml --bin notify_telegram_v050
 
 # ── Runtime image ──────────────────────────────────────────────────────────────
 FROM debian:latest
