@@ -2130,6 +2130,7 @@ async fn upload_via_wzgram(
     }
 
     let status = child
+        .wait()
         .await
         .map_err(|e| format!("wait for WZGram sidecar: {}", e))?;
     let _ = stderr_task.await;
