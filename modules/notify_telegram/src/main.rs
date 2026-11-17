@@ -1763,7 +1763,7 @@ async fn md5_of_file(path: &Path) -> Result<String, String> {
 /// Parse the server-requested delay from an RPC error name/value. Telegram may return
 /// `FLOOD_WAIT_42`, `FLOOD_WAIT_X` (seconds in the value field), or the non-Premium upload
 /// limit `FLOOD_PREMIUM_WAIT_3600`. The old code only matched the exact `FLOOD_WAIT`.
-fn wait_secs_from_rpc_name(name: &str, value: Option<i32>) -> Option<u64> {
+fn wait_secs_from_rpc_name(name: &str, value: Option<u32>) -> Option<u64> {
     for prefix in ["FLOOD_PREMIUM_WAIT", "FLOOD_WAIT"] {
         let Some(rest) = name.strip_prefix(prefix) else {
             continue;
@@ -3706,15 +3706,15 @@ mod tests {
     #[test]
     fn rpc_wait_errors_are_parsed() {
         assert_eq!(wait_secs_from_rpc_name("FLOOD_WAIT_42", None), Some(42));
-        assert_eq!(wait_secs_from_rpc_name("FLOOD_WAIT_X", Some(15)), Some(15));
+        assert_eq!(wait_secs_from_rpc_name("FLOOD_WAIT_X", Some(15u32)), Some(15));
         assert_eq!(wait_secs_from_rpc_name("FLOOD_PREMIUM_WAIT_90", None), Some(90));
-        assert_eq!(wait_secs_from_rpc_name("FLOOD_PREMIUM_WAIT_X", Some(7)), Some(7));
+        assert_eq!(wait_secs_from_rpc_name("FLOOD_PREMIUM_WAIT_X", Some(7u32)), Some(7));
         assert_eq!(wait_secs_from_rpc_name("FLOOD_WAIT_0", None), Some(1));
         assert_eq!(
             wait_secs_from_rpc_name("FLOOD_WAIT_999999", None),
             Some(MAX_RPC_WAIT_SECS)
         );
-        assert_eq!(wait_secs_from_rpc_name("CHANNEL_INVALID", Some(3)), None);
+        assert_eq!(wait_secs_from_rpc_name("CHANNEL_INVALID", Some(3u32)), None);
     }
 
     /// 通用退避序列：第一次失败用第一个值，超出后重复最后一个值。
