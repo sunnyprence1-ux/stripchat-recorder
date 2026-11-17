@@ -8,6 +8,7 @@ RUN sed -i 's/deb.debian.org/mirrors.ustc.edu.cn/g' /etc/apt/sources.list.d/debi
 
 RUN apt-get update && apt-get install -y \
     curl \
+    git \
     pkg-config \
     build-essential \
     libssl-dev \
