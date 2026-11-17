@@ -112,10 +112,6 @@ fn collect_from_meta(
                 None => continue,
             };
 
-            if !seen.insert(video_path.clone()) {
-                continue;
-            }
-
             let meta = match crate::recording::meta::read_meta_file(&path) {
                 Some(m) => m,
                 None => continue,
@@ -132,6 +128,9 @@ fn collect_from_meta(
                     meta.size_bytes
                 };
 
+                if !seen.insert(video_path.clone()) {
+                    continue;
+                }
                 files.push(RecordingFile {
                     name: format!("{}.{}", stem, merge_format),
                     path: video_path.to_string_lossy().to_string(),
@@ -158,6 +157,9 @@ fn collect_from_meta(
                     let size_bytes =
                         crate::recording::recorder::dir_size_bytes(&session_dir).unwrap_or(0);
 
+                    if !seen.insert(video_path.clone()) {
+                        continue;
+                    }
                     files.push(RecordingFile {
                         name: format!("{}.{}", stem, merge_format),
                         path: video_path.to_string_lossy().to_string(),
@@ -171,18 +173,9 @@ fn collect_from_meta(
                         module_outputs: None,
                     });
                 } else {
-                    files.push(RecordingFile {
-                        name: format!("{}.{}", stem, merge_format),
-                        path: video_path.to_string_lossy().to_string(),
-                        size_bytes: meta.size_bytes,
-                        started_at: meta.started_at,
-                        is_recording: false,
-                        record_duration_secs: None,
-                        video_duration_secs: None,
-                        status: Some(meta.status),
-                        pp_results: meta.pp_results,
-                        module_outputs: meta.module_outputs,
-                    });
+                    // Stale meta: no video and no active recording owns this path.
+                    // Do not show it as a deletable file. "Clean Everything" removes
+                    // stale meta files together with the recording roots.
                 }
             }
         }
@@ -227,6 +220,12 @@ pub fn delete_recording_inner(
         for _ in 0..20 {
             match fs::remove_file(p) {
                 Ok(()) => {
+                    last_err = None;
+                    break;
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    // Idempotent delete: a stale list entry may point to a file
+                    // that is already gone. Still clean its meta/sidecars below.
                     last_err = None;
                     break;
                 }

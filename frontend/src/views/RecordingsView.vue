@@ -72,6 +72,8 @@
 	const ppCancelledByDelete = new Set<string>();
 	/** 正在一键清理 / Clean-everything request in flight */
 	const cleaningAll = ref(false);
+	/** 正在一键删除 / Delete-all request in flight */
+	const deletingAll = ref(false);
 
 	/** 磁盘空间信息 / Disk space information */
 	interface DiskSpace {
@@ -406,47 +408,61 @@
 
 	/** 一键删除所有视频（保留录制中和上传中的文件）/ Delete every video, keeping active recordings and uploads */
 	async function deleteAllVideos() {
-		const paths = deleteAllPaths.value;
-		if (paths.length === 0) return;
-		const ok = await confirm({
-			title: t("recordings.deleteAllDialog.title"),
-			message: t("recordings.deleteAllDialog.message", { count: paths.length }),
-			confirmText: t("recordings.deleteAllDialog.confirm"),
-			danger: true,
-		});
-		if (!ok) return;
+		if (deletingAll.value) return;
+		deletingAll.value = true;
+		try {
+			const paths = deleteAllPaths.value;
+			if (paths.length === 0) return;
+			const ok = await confirm({
+				title: t("recordings.deleteAllDialog.title"),
+				message: t("recordings.deleteAllDialog.message", { count: paths.length }),
+				confirmText: t("recordings.deleteAllDialog.confirm"),
+				danger: true,
+			});
+			if (!ok) return;
 
-		await Promise.all(
-			paths
-				.filter((p) => ppStatus.value[p] === "running")
-				.map((p) => {
-					ppCancelledByDelete.add(p);
-					return call("cancel_postprocess", { path: p }).catch(() => {});
-				}),
-		);
-
-		let failed = 0;
-		for (const path of paths) {
-			try {
-				localDeletedPaths.add(path);
-				await call("delete_recording", { path });
-				files.value = files.value.filter((r) => r.path !== path);
-				delete elapsed.value[path];
-				ppRemoveFile(path);
-				selected.value.delete(path);
-			} catch {
-				localDeletedPaths.delete(path);
-				failed++;
-			}
-		}
-		selected.value.clear();
-		if (failed > 0)
-			toast(t("recordings.deleteAllDialog.failed", { count: failed }), "error");
-		else
-			toast(
-				t("recordings.deleteAllDialog.done", { count: paths.length }),
-				"success",
+			await Promise.all(
+				paths
+					.filter((p) => ppStatus.value[p] === "running")
+					.map((p) => {
+						ppCancelledByDelete.add(p);
+						return call("cancel_postprocess", { path: p }).catch(() => {});
+					}),
 			);
+
+			let failed = 0;
+			let firstError = "";
+			for (const path of paths) {
+				try {
+					localDeletedPaths.add(path);
+					await call("delete_recording", { path });
+					files.value = files.value.filter((r) => r.path !== path);
+					delete elapsed.value[path];
+					ppRemoveFile(path);
+					selected.value.delete(path);
+				} catch (e) {
+					localDeletedPaths.delete(path);
+					failed++;
+					if (!firstError) firstError = String(e);
+				}
+			}
+			selected.value.clear();
+			if (failed > 0)
+				toast(
+					t("recordings.deleteAllDialog.failed", {
+						count: failed,
+						reason: firstError ? ` (${firstError})` : "",
+					}),
+					"error",
+				);
+			else
+				toast(
+					t("recordings.deleteAllDialog.done", { count: paths.length }),
+					"success",
+				);
+		} finally {
+			deletingAll.value = false;
+		}
 	}
 
 	/**
@@ -941,7 +957,7 @@
 					variant="destructive"
 					size="sm"
 					class="gap-1.5"
-					:disabled="cleaningAll"
+					:disabled="cleaningAll || deletingAll"
 					@click="cleanEverything"
 				>
 					<Loader2 v-if="cleaningAll" class="size-3.5 animate-spin" />
@@ -951,7 +967,7 @@
 					<Button
 						variant="outline"
 						size="sm"
-						:disabled="cleaningAll || ppAllPaths.length === 0"
+						:disabled="cleaningAll || deletingAll || ppAllPaths.length === 0"
 						@click="postProcessAll"
 					>
 						{{ t("recordings.postprocessAll", { count: ppAllPaths.length }) }}
@@ -959,16 +975,18 @@
 					<Button
 						variant="destructive"
 						size="sm"
-						:disabled="cleaningAll || deleteAllPaths.length === 0"
+						class="gap-1.5"
+						:disabled="cleaningAll || deletingAll || deleteAllPaths.length === 0"
 						@click="deleteAllVideos"
 					>
+						<Loader2 v-if="deletingAll" class="size-3.5 animate-spin" />
 						{{ t("recordings.deleteAllVideos", { count: deleteAllPaths.length }) }}
 					</Button>
 					<Button
 						v-if="selectedCount > 0"
 						variant="outline"
 						size="sm"
-						:disabled="cleaningAll || ppSelectableCount === 0"
+						:disabled="cleaningAll || deletingAll || ppSelectableCount === 0"
 						@click="postProcessSelected"
 					>
 						{{ t("recordings.batchPostprocess", { count: ppSelectableCount }) }}
@@ -978,7 +996,7 @@
 						variant="outline"
 						size="sm"
 						class="gap-1.5"
-						:disabled="cleaningAll || tgSelectablePaths.length === 0"
+						:disabled="cleaningAll || deletingAll || tgSelectablePaths.length === 0"
 						@click="sendSelectedToTelegram"
 					>
 						<Send class="size-3.5" />
@@ -988,7 +1006,7 @@
 						v-if="selectedCount > 0"
 						variant="destructive"
 						size="sm"
-						:disabled="cleaningAll"
+						:disabled="cleaningAll || deletingAll"
 						@click="deleteSelected"
 					>
 						{{ t("recordings.deleteSelected", { count: selectedCount }) }}
@@ -1003,7 +1021,7 @@
 				variant="destructive"
 				size="sm"
 				class="shrink-0 text-xs px-2 gap-1"
-				:disabled="cleaningAll"
+				:disabled="cleaningAll || deletingAll"
 				@click="cleanEverything"
 			>
 				<Loader2 v-if="cleaningAll" class="size-3.5 animate-spin" />
@@ -1038,7 +1056,7 @@
 					variant="outline"
 					size="sm"
 					class="shrink-0 text-xs px-2"
-					:disabled="cleaningAll || ppAllPaths.length === 0"
+					:disabled="cleaningAll || deletingAll || ppAllPaths.length === 0"
 					@click="postProcessAll"
 				>
 					{{ t("recordings.postprocessAllShort", { count: ppAllPaths.length }) }}
@@ -1046,10 +1064,11 @@
 				<Button
 					variant="destructive"
 					size="sm"
-					class="shrink-0 text-xs px-2"
-					:disabled="cleaningAll || deleteAllPaths.length === 0"
+					class="shrink-0 text-xs px-2 gap-1.5"
+					:disabled="cleaningAll || deletingAll || deleteAllPaths.length === 0"
 					@click="deleteAllVideos"
 				>
+					<Loader2 v-if="deletingAll" class="size-3.5 animate-spin" />
 					{{ t("recordings.deleteAllShort", { count: deleteAllPaths.length }) }}
 				</Button>
 			</template>

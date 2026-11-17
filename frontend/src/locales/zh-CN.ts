@@ -175,7 +175,7 @@ export default {
 			message: "确定删除 {count} 个视频文件吗？正在录制或正在上传的文件会跳过，此操作不可撤销。",
 			confirm: "全部删除",
 			done: "已删除 {count} 个文件",
-			failed: "删除完成，{count} 个文件失败",
+			failed: "删除完成，{count} 个文件失败{reason}",
 		},
 		cleanAllDialog: {
 			title: "清理全部",

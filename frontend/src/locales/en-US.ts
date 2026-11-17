@@ -177,7 +177,7 @@ export default {
 				"Delete {count} video file(s)? Files currently recording or being uploaded are skipped. This cannot be undone.",
 			confirm: "Delete All",
 			done: "Deleted {count} file(s)",
-			failed: "Done, {count} file(s) failed",
+			failed: "Done, {count} file(s) failed{reason}",
 		},
 		cleanAllDialog: {
 			title: "Clean Everything",
