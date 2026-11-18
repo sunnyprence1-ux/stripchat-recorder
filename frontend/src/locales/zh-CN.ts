@@ -223,10 +223,10 @@ export default {
 		},
 		login: {
 			button: "登录",
-			hint: "登录一次并生成会话文件（用户账号与大文件上传需要）",
+			hint: "登录一次并把凭证保存在服务器上（用户账号与大文件上传需要）",
 			title: "登录 {name}",
 			description:
-				"使用你自己的账号登录，并在本机生成会话文件。手机号和验证码只会发送给 Telegram。",
+				"使用你自己的账号登录，并把登录凭证保存在服务器上。凭证只会发送给你正在登录的服务。",
 			connecting: "正在连接 Telegram…",
 			phoneLabel: "手机号（国际格式）",
 			phonePlaceholder: "+8613800138000",
@@ -234,8 +234,8 @@ export default {
 			codeLabel: "验证码",
 			codeSent: "验证码已发送到你的 Telegram 客户端，请在下方输入。",
 			verify: "验证",
-			deviceHint: "请在浏览器中打开以下网址，并输入下方代码。",
-			deviceCheck: "检查授权状态",
+			deviceHint: "请打开以下网址，用你的 Google 账号登录，然后把验证码粘贴到下方。",
+			oauthCodePlaceholder: "Google 验证码",
 			passwordLabel: "两步验证密码",
 			passwordHint: "该账号已开启两步验证。密码提示：{hint}",
 			passwordHintNone: "该账号已开启两步验证。",
@@ -249,7 +249,7 @@ export default {
 			retry: "重新开始",
 			useAccount: "让本节点使用该账号",
 			accountActive: "本节点已使用该账号",
-			reloginNewNumber: "换号登录 / 创建全新会话",
+			reloginNewNumber: "重新登录 / 全新会话",
 		},
 	},
 	finder: {

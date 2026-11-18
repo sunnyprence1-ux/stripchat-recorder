@@ -5,29 +5,18 @@ use reqwest::blocking::{Client, Response};
 use serde_json::{json, Value};
 use std::env;
 use std::fs::{self, File};
-use std::io::{BufRead, Read, Write};
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 const DESCRIBE: &str = r#"{
     "id": "upload_gdrive",
-    "name": "Google Drive Upload 0.1.0",
+    "name": "Google Drive Upload 0.2.0",
     "description": "Upload finished videos to Google Drive, one folder per model",
     "loginable": true,
     "testable": true,
     "params": [
-        {
-            "key": "client_id",
-            "label": "Google OAuth Client ID",
-            "type": "string",
-            "default": ""
-        },
-        {
-            "key": "client_secret",
-            "label": "Google OAuth Client Secret",
-            "type": "string",
-            "default": ""
-        },
         {
             "key": "root_folder",
             "label": "Root folder name in Google Drive",
@@ -36,7 +25,7 @@ const DESCRIBE: &str = r#"{
         },
         {
             "key": "upload_cover",
-            "label": "Also upload the cover image if one exists",
+            "label": "Also upload an extracted cover frame before the video",
             "type": "boolean",
             "default": "true"
         },
@@ -51,9 +40,6 @@ const DESCRIBE: &str = r#"{
 
 const DRIVE_API: &str = "https://www.googleapis.com/drive/v3";
 const DRIVE_UPLOAD_API: &str = "https://www.googleapis.com/upload/drive/v3";
-const OAUTH_DEVICE_URL: &str = "https://oauth2.googleapis.com/device/code";
-const OAUTH_TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
-const SCOPE: &str = "https://www.googleapis.com/auth/drive.file";
 const CHUNK_SIZE: usize = 8 * 1024 * 1024;
 
 fn http_client() -> Client {
@@ -88,29 +74,72 @@ fn app_root() -> PathBuf {
     }
 }
 
-fn token_path() -> PathBuf {
+fn gcloud_config_dir() -> PathBuf {
     if let Ok(dir) = env::var("PP_GDRIVE_TOKEN_DIR") {
-        return PathBuf::from(dir).join("oauth.json");
+        return PathBuf::from(dir).join("gcloud");
     }
-    app_root().join("config/upload_gdrive/oauth.json")
+    app_root().join("config/upload_gdrive/gcloud")
 }
 
-fn read_token() -> Result<Value, String> {
-    let path = token_path();
-    if !path.exists() {
-        return Err("Google Drive is not signed in yet".to_string());
+fn gcloud_bin() -> PathBuf {
+    let bundled = PathBuf::from("/opt/google-cloud-sdk/bin/gcloud");
+    if bundled.exists() {
+        bundled
+    } else {
+        PathBuf::from("gcloud")
     }
-    let content = fs::read_to_string(&path).map_err(|e| format!("read token file failed: {}", e))?;
-    serde_json::from_str(&content).map_err(|e| format!("invalid token file: {}", e))
 }
 
-fn write_token(value: &Value) -> Result<(), String> {
-    let path = token_path();
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|e| format!("create token dir failed: {}", e))?;
+fn gcloud_command() -> Command {
+    let mut command = Command::new(gcloud_bin());
+    command
+        .env("CLOUDSDK_CONFIG", gcloud_config_dir())
+        .env("PYTHONUNBUFFERED", "1");
+    command
+}
+
+fn gcloud_account() -> Option<String> {
+    let output = gcloud_command()
+        .args([
+            "auth",
+            "list",
+            "--filter=status:ACTIVE",
+            "--format=value(account)",
+        ])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
     }
-    let content = serde_json::to_string_pretty(value).map_err(|e| format!("serialize token failed: {}", e))?;
-    fs::write(&path, content + "\n").map_err(|e| format!("write token file failed: {}", e))
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(|line| line.trim())
+        .find(|line| !line.is_empty())
+        .map(|line| line.to_string())
+}
+
+fn gcloud_access_token() -> Result<String, String> {
+    let output = gcloud_command()
+        .args(["auth", "print-access-token"])
+        .output()
+        .map_err(|e| format!("could not run gcloud: {}", e))?;
+    if !output.status.success() {
+        let detail = String::from_utf8_lossy(&output.stderr);
+        let message = if detail.trim().is_empty() {
+            "Google Drive is not signed in. Click Login in the pipeline.".to_string()
+        } else {
+            format!(
+                "Google Drive is not signed in. Click Login in the pipeline. ({})",
+                detail.trim()
+            )
+        };
+        return Err(message);
+    }
+    let token = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if token.is_empty() {
+        return Err("Google Drive is not signed in. Click Login in the pipeline.".to_string());
+    }
+    Ok(token)
 }
 
 fn json_text(resp: Response) -> Result<(u16, Value), String> {
@@ -126,243 +155,57 @@ fn json_text(resp: Response) -> Result<(u16, Value), String> {
     Ok((status, value))
 }
 
-fn drive_account_name(client: &Client, token: &str) -> String {
-    let url = format!("{}/about?fields=user", DRIVE_API);
-    if let Ok(resp) = client
-        .get(&url)
-        .header("Authorization", format!("Bearer {}", token))
-        .send()
-    {
-        if let Ok((200, body)) = json_text(resp) {
-            if let Some(email) = body.pointer("/user/emailAddress").and_then(|v| v.as_str()) {
-                return email.to_string();
-            }
-            if let Some(name) = body.pointer("/user/displayName").and_then(|v| v.as_str()) {
-                return name.to_string();
-            }
-        }
-    }
-    "Google Drive".to_string()
-}
-
 fn login_state(state: &str) {
     println!("LOGIN_STATE:{}", state);
     let _ = std::io::stdout().flush();
 }
 
-fn now_secs() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
-}
-
-fn request_device_code(client: &Client, client_id: &str) -> Result<Value, String> {
-    let resp = client
-        .post(OAUTH_DEVICE_URL)
-        .form(&[("client_id", client_id), ("scope", SCOPE)])
-        .send()
-        .map_err(|e| format!("device code request failed: {}", e))?;
-    let (status, body) = json_text(resp)?;
-    if status != 200 {
-        return Err(format!("device code request failed (HTTP {}): {:?}", status, body));
-    }
-    Ok(body)
-}
-
-fn poll_device_token(
-    client: &Client,
-    client_id: &str,
-    client_secret: &str,
-    device_code: &str,
-) -> Result<Value, String> {
-    let resp = client
-        .post(OAUTH_TOKEN_URL)
-        .form(&[
-            ("client_id", client_id),
-            ("client_secret", client_secret),
-            ("device_code", device_code),
-            ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
-        ])
-        .send()
-        .map_err(|e| format!("token poll failed: {}", e))?;
-    let (status, body) = json_text(resp)?;
-    if status == 200 {
-        return Ok(body);
-    }
-    let code = body.get("error").and_then(|v| v.as_str()).unwrap_or("");
-    if code == "authorization_pending" || code == "slow_down" {
-        return Err("pending".to_string());
-    }
-    Err(format!("token poll failed (HTTP {}): {:?}", status, body))
-}
-
 fn run_login() -> Result<(), String> {
-    let client = http_client();
-    let force = env::var("PP_FORCE_LOGIN").map(|v| v == "1" || v == "true").unwrap_or(false)
+    let force = env::var("PP_FORCE_LOGIN")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
         || env::args().any(|a| a == "--fresh" || a == "--force");
 
-    let path = token_path();
-    if path.exists() && !force {
-        if let Ok(token) = read_token() {
-            let email = token
-                .get("email")
-                .and_then(|v| v.as_str())
-                .unwrap_or("Google Drive");
-            login_state(&format!("already:{}", email));
-            return Ok(());
-        }
-    }
-    if force {
-        let _ = fs::remove_file(&path);
-    }
-
-    let client_id = param("client_id", "");
-    let client_secret = param("client_secret", "");
-    if client_id.trim().is_empty() {
-        login_state("error:Google OAuth Client ID is required");
-        return Err("client_id is required".to_string());
-    }
-    if client_secret.trim().is_empty() {
-        login_state("error:Google OAuth Client Secret is required");
-        return Err("client_secret is required".to_string());
-    }
-
-    let device = request_device_code(&client, &client_id)?;
-    let verification_url = device
-        .get("verification_url")
-        .or_else(|| device.get("verification_uri"))
-        .and_then(|v| v.as_str())
-        .unwrap_or("https://www.google.com/device")
-        .to_string();
-    let user_code = device
-        .get("user_code")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
-    let device_code = device
-        .get("device_code")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
-    if user_code.is_empty() || device_code.is_empty() {
-        login_state("error:device code response is incomplete");
-        return Err("device code response is incomplete".to_string());
-    }
-
-    login_state(&format!("device:{}|{}", verification_url, user_code));
-
-    let stdin = std::io::stdin();
-    for line in stdin.lock().lines() {
-        let Ok(line) = line else { break };
-        let line = line.trim();
-        if line == "quit" {
-            login_state("cancelled");
-            return Ok(());
-        }
-        if line.is_empty() {
-            continue;
-        }
-        match poll_device_token(&client, &client_id, &client_secret, &device_code) {
-            Ok(mut token) => {
-                if token.get("refresh_token").is_none() {
-                    login_state("error:Google did not return a refresh token. Remove app access in your Google Account and try again.");
-                    return Err("refresh token missing".to_string());
-                }
-                let access_token = token
-                    .get("access_token")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                let email = drive_account_name(&client, &access_token);
-                token["email"] = json!(email);
-                token["client_id"] = json!(client_id);
-                token["client_secret"] = json!(client_secret);
-                token["created_at"] = json!(now_secs());
-                write_token(&token)?;
-                login_state(&format!("done:{}", email));
+    if !force {
+        if let Some(email) = gcloud_account() {
+            if gcloud_access_token().is_ok() {
+                login_state(&format!("already:{}", email));
                 return Ok(());
             }
-            Err(err) if err == "pending" => {
-                login_state(&format!("device:{}|{}", verification_url, user_code));
-            }
-            Err(err) => {
-                login_state(&format!("error:{}", err));
-                return Err(err);
-            }
         }
+    } else {
+        // A fresh login must not reuse an old gcloud config with different scopes.
+        let _ = fs::remove_dir_all(gcloud_config_dir());
     }
-    Err("stdin closed before login completed".to_string())
+
+    let script = app_root().join("gcloud_login.py");
+    if !script.exists() {
+        login_state("error:gcloud_login.py is missing from the image");
+        return Err(format!("missing {}", script.display()));
+    }
+
+    let mut command = Command::new("python3");
+    command
+        .arg(&script)
+        .env("PP_EXE_DIR", app_root())
+        .env("CLOUDSDK_CONFIG", gcloud_config_dir())
+        .env("PYTHONUNBUFFERED", "1")
+        .env("PP_FORCE_LOGIN", if force { "1" } else { "0" })
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit());
+
+    let status = command
+        .status()
+        .map_err(|e| format!("could not start Google login: {}", e))?;
+    if !status.success() {
+        return Err("Google login failed".to_string());
+    }
+    Ok(())
 }
 
-fn refresh_access_token(client: &Client, token: &mut Value) -> Result<(), String> {
-    let refresh_token = token
-        .get("refresh_token")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
-    if refresh_token.is_empty() {
-        return Err("stored token has no refresh_token".to_string());
-    }
-    let client_id = token
-        .get("client_id")
-        .and_then(|v| v.as_str())
-        .map(|v| v.to_string())
-        .unwrap_or_else(|| param("client_id", ""));
-    let client_secret = token
-        .get("client_secret")
-        .and_then(|v| v.as_str())
-        .map(|v| v.to_string())
-        .unwrap_or_else(|| param("client_secret", ""));
-    if client_id.is_empty() || client_secret.is_empty() {
-        return Err("client_id/client_secret are required to refresh the token".to_string());
-    }
-
-    let resp = client
-        .post(OAUTH_TOKEN_URL)
-        .form(&[
-            ("client_id", client_id.as_str()),
-            ("client_secret", client_secret.as_str()),
-            ("refresh_token", refresh_token.as_str()),
-            ("grant_type", "refresh_token"),
-        ])
-        .send()
-        .map_err(|e| format!("token refresh failed: {}", e))?;
-    let (status, body) = json_text(resp)?;
-    if status != 200 {
-        return Err(format!("token refresh failed (HTTP {}): {:?}", status, body));
-    }
-    let access_token = body
-        .get("access_token")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
-    let expires_in = body.get("expires_in").and_then(|v| v.as_u64()).unwrap_or(3600);
-    token["access_token"] = json!(access_token);
-    token["expires_in"] = json!(expires_in);
-    token["created_at"] = json!(now_secs());
-    write_token(token)
-}
-
-fn access_token(client: &Client) -> Result<String, String> {
-    let mut token = read_token()?;
-    let now = now_secs();
-    let created = token.get("created_at").and_then(|v| v.as_u64()).unwrap_or(0);
-    let expires_in = token.get("expires_in").and_then(|v| v.as_u64()).unwrap_or(3600);
-    let access = token
-        .get("access_token")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
-    if access.is_empty() || created + expires_in.saturating_sub(60) <= now {
-        refresh_access_token(client, &mut token)?;
-        return Ok(token
-            .get("access_token")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string());
-    }
-    Ok(access)
+fn access_token() -> Result<String, String> {
+    gcloud_access_token()
 }
 
 fn folder_query(name: &str, parent: Option<&str>) -> String {
@@ -595,7 +438,7 @@ fn run() -> Result<(), String> {
         return Err(format!("Input file not found: {}", input.display()));
     }
     let client = http_client();
-    let token = access_token(&client)?;
+    let token = access_token()?;
     let root_folder = {
         let value = param("root_folder", "Stripchat");
         if value.trim().is_empty() {
@@ -661,7 +504,7 @@ fn run() -> Result<(), String> {
 
 fn run_test() -> Result<(), String> {
     let client = http_client();
-    let token = access_token(&client)?;
+    let token = access_token()?;
     let root_folder = {
         let value = param("root_folder", "Stripchat");
         if value.trim().is_empty() {
@@ -671,8 +514,7 @@ fn run_test() -> Result<(), String> {
         }
     };
     let root_id = ensure_folder(&client, &token, &root_folder, None)?;
-    let stored = read_token()?;
-    let email = stored.get("email").and_then(|v| v.as_str()).unwrap_or("Google Drive");
+    let email = gcloud_account().unwrap_or_else(|| "Google Drive".to_string());
     println!("Google Drive: signed in as {}", email);
     println!("Google Drive: root folder {} ({})", root_folder, root_id);
     println!("SELF-TEST PASSED");

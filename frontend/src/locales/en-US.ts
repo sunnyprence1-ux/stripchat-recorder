@@ -226,10 +226,10 @@ export default {
 		},
 		login: {
 			button: "Login",
-			hint: "Sign in once and store a session file (needed for user accounts and large uploads)",
+			hint: "Sign in once and store the credentials on the server (needed for user accounts and large uploads)",
 			title: "Sign in {name}",
 			description:
-				"Signs in with your own account and stores a session file on this device. Your phone number and login code are only sent to Telegram.",
+				"Signs in with your own account and stores the session on the server. Credentials are only sent to the service you are signing in to.",
 			connecting: "Connecting to Telegram…",
 			phoneLabel: "Phone number (international format)",
 			phonePlaceholder: "+8613800138000",
@@ -238,8 +238,9 @@ export default {
 			codeSent:
 				"A login code was sent to your Telegram app. Enter it below.",
 			verify: "Verify",
-			deviceHint: "Open this URL in your browser and enter the code below.",
-			deviceCheck: "Check authorization",
+			deviceHint:
+				"Open this URL, sign in with your Google account, then paste the verification code below.",
+			oauthCodePlaceholder: "Google verification code",
 			passwordLabel: "Two-factor password",
 			passwordHint: "Two-step verification is enabled. Hint: {hint}",
 			passwordHintNone: "Two-step verification is enabled.",
@@ -254,7 +255,7 @@ export default {
 			retry: "Start Over",
 			useAccount: "Use this account for the node",
 			accountActive: "This node already uses your account",
-			reloginNewNumber: "Log in with new number / fresh session",
+			reloginNewNumber: "Sign in again / fresh session",
 		},
 	},
 	finder: {

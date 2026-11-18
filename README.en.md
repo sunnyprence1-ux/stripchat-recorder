@@ -156,6 +156,8 @@ Modules are standalone executables implementing a simple protocol. They receive 
 | `notify_telegram` | Sends recording info, an extracted video frame, and video to Telegram via MTProto (supports files >2 GB, HTTP/SOCKS5 proxy); can create/reuse one forum topic per model and post into it |
 | `upload_gdrive`   | Uploads finished videos to Google Drive, one folder per model                  |
 
+> `upload_gdrive` uses the Google Cloud SDK sign-in flow, so **you do not need to create an OAuth Client ID**: click **Login** on the node, open the Google link, sign in with your Google account, and paste the verification code shown by Google back into the app. Google grants the scopes requested by the Cloud SDK (including Google Drive access); the credentials stay on the server under `data/config/upload_gdrive/gcloud/`.
+
 Custom modules placed in the `modules` volume directory are discovered automatically and will not be overwritten when the container restarts. See the [Module Development Guide](docs/module-development.en.md) for details.
 
 ### Testing a Module

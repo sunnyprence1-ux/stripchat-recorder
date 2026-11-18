@@ -155,6 +155,8 @@ docker run -d \
 | `notify_telegram` | 通过 MTProto 向 Telegram 发送录制信息、视频截帧封面和视频，可按模特创建/复用群组话题（Topic）并把视频发到对应话题 |
 | `upload_gdrive`   | 把成片上传到 Google Drive，并按模特分文件夹         |
 
+> `upload_gdrive` 使用 Google Cloud SDK 自带的登录流程，**不需要创建 OAuth Client ID**：点击节点上的「登录」，打开 Google 链接并用你的 Google 账号授权，然后把页面显示的验证码粘贴回界面。授权范围由 Google Cloud SDK 申请（包含 Google Drive 访问），凭证保存在服务器上的 `data/config/upload_gdrive/gcloud/`。
+
 将自定义模块放入 `modules` 数据卷目录后会被自动发现，且不会在容器重启时被覆盖。详见[后处理模块开发文档](docs/module-development.md)。
 
 ### 模块测试

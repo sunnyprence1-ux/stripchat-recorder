@@ -31,6 +31,14 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://mirrors.ustc.edu.cn/misc/rustup
     . /root/.cargo/env && \
     rustup target add x86_64-unknown-linux-gnu
 
+# Google Cloud SDK provides the Google account login flow for Google Drive.
+# It uses Google's own OAuth client, so the user never creates a client ID.
+# Pin the version so the --enable-gdrive-access login flag cannot disappear.
+RUN curl -fsSL https://dl.google.com/dl/cloudsdk/channels/rapid/downloads/google-cloud-cli-594.0.0-linux-x86_64.tar.gz -o /tmp/google-cloud-sdk.tar.gz \
+    && tar -xzf /tmp/google-cloud-sdk.tar.gz -C /opt \
+    && /opt/google-cloud-sdk/install.sh --quiet --usage-reporting false --path-update false --command-completion false \
+    && rm /tmp/google-cloud-sdk.tar.gz
+
 RUN mkdir -vp ${CARGO_HOME:-$HOME/.cargo} && \
     printf '%s\n' \
     '[source.crates-io]' \
@@ -87,13 +95,18 @@ WORKDIR /app
 
 COPY --from=builder /app/build/stripchat-recorder /app/stripchat-recorder/
 COPY --from=builder /app/build/modules/ /app/stripchat-recorder/modules.default/
+COPY --from=builder /opt/google-cloud-sdk /opt/google-cloud-sdk
 COPY modules/notify_telegram/wzgram_upload.py /app/stripchat-recorder/wzgram_upload.py
+COPY modules/upload_gdrive/gcloud_login.py /app/stripchat-recorder/gcloud_login.py
 
 RUN chmod +x /app/stripchat-recorder/stripchat-recorder \
+    && chmod +x /app/stripchat-recorder/gcloud_login.py \
     && chmod 0644 /app/stripchat-recorder/wzgram_upload.py \
-    && python3 -m py_compile /app/stripchat-recorder/wzgram_upload.py
+    && python3 -m py_compile /app/stripchat-recorder/wzgram_upload.py \
+    && python3 -m py_compile /app/stripchat-recorder/gcloud_login.py
 
 ENV WZGRAM_PYTHON=/opt/wzgram-venv/bin/python
+ENV PATH="/opt/google-cloud-sdk/bin:${PATH}"
 
 RUN printf '%s\n' \
     '#!/bin/sh' \
