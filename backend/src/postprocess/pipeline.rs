@@ -123,20 +123,27 @@ fn module_binary_mtime(path: &Path) -> u64 {
 /// A stale binary can make the same module ID appear more than once. Keep only the
 /// highest version (then the newest mtime) so a pipeline never binds to an old build.
 pub fn discover_modules() -> Vec<ModuleInfo> {
-    let dir = modules_dir();
-    if !dir.exists() {
+    // Scan both the persistent modules volume and the copy bundled in the image.
+    // A stale binary in the volume (e.g. upload_gdrive_v010) must never beat the
+    // current built-in binary (upload_gdrive_v020).  Bundled binaries get a
+    // higher priority so they win ties; custom modules only in `modules/` are
+    // still discovered normally.
+    let mut paths: Vec<(PathBuf, u8)> = Vec::new();
+    for (dir, priority) in [
+        (exe_dir().join("modules.default"), 1u8),
+        (modules_dir(), 0u8),
+    ] {
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            paths.extend(entries.flatten().map(|entry| (entry.path(), priority)));
+        }
+    }
+    if paths.is_empty() {
         return vec![];
     }
 
-    let entries = match std::fs::read_dir(&dir) {
-        Ok(e) => e,
-        Err(_) => return vec![],
-    };
+    let mut candidates: Vec<(ModuleInfo, u64, u8, u64)> = Vec::new();
 
-    let mut candidates: Vec<(ModuleInfo, u64, u64)> = Vec::new();
-
-    for entry in entries.flatten() {
-        let path = entry.path();
+    for (path, priority) in paths {
         if !path.is_file() {
             continue;
         }
@@ -161,7 +168,7 @@ pub fn discover_modules() -> Vec<ModuleInfo> {
                 let version = module_binary_version(&path);
                 let mtime = module_binary_mtime(&path);
                 info.exe_path = path;
-                candidates.push((info, version, mtime));
+                candidates.push((info, version, priority, mtime));
             }
             Err(e) => {
                 tracing::error!("Failed to describe module {:?}: {}", path, e);
@@ -176,12 +183,13 @@ pub fn discover_modules() -> Vec<ModuleInfo> {
             .cmp(&b.0.id)
             .then_with(|| b.1.cmp(&a.1))
             .then_with(|| b.2.cmp(&a.2))
+            .then_with(|| b.3.cmp(&a.3))
             .then_with(|| a.0.exe_path.cmp(&b.0.exe_path))
     });
 
     let mut modules = Vec::new();
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-    for (info, _version, _) in candidates {
+    for (info, _version, _priority, _mtime) in candidates {
         if seen.insert(info.id.clone()) {
             modules.push(info);
         } else {
