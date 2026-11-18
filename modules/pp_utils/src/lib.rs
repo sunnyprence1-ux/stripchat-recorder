@@ -270,6 +270,63 @@ pub fn sidecar_dir() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
+/// 从视频中截取一帧作为封面图，返回临时文件路径。
+///
+/// 依次尝试三种方式：快速定位（`-ss` 在 `-i` 前）、精确定位（`-ss` 在 `-i` 后）、
+/// 直接取第一帧。部分 HLS/TS 录制的时间戳不是从 0 开始，单纯使用快速定位可能截不到画面。
+///
+/// Extract one frame from a video and return the temporary file path.
+///
+/// Tries fast seek (`-ss` before `-i`), accurate seek (`-ss` after `-i`), then the
+/// first frame. Some HLS/TS recordings start at a non-zero timestamp, where fast
+/// seek alone can produce no frame.
+pub fn extract_video_frame(input: &Path, suffix: &str) -> Result<PathBuf, String> {
+    let stem = input
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("recording");
+    let frame_path = tmp_dir().join(format!("{}.{}.jpg", stem, suffix));
+    let duration = video_duration(input).unwrap_or(0.0);
+    let seek = if duration > 10.0 {
+        "5"
+    } else if duration > 2.0 {
+        "1"
+    } else {
+        "0"
+    };
+
+    for mode in 0..3 {
+        let _ = std::fs::remove_file(&frame_path);
+        let mut command = Command::new("ffmpeg");
+        command.arg("-y");
+        if mode == 0 {
+            command.args(["-ss", seek]);
+        }
+        command.arg("-i").arg(input);
+        if mode == 1 {
+            command.args(["-ss", seek]);
+        }
+        command
+            .args(["-frames:v", "1", "-q:v", "2"])
+            .arg(&frame_path)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+
+        let status = command
+            .status()
+            .map_err(|e| format!("ffmpeg not found: {}", e))?;
+        let non_empty = std::fs::metadata(&frame_path)
+            .map(|meta| meta.len() > 0)
+            .unwrap_or(false);
+        if status.success() && non_empty {
+            return Ok(frame_path);
+        }
+    }
+
+    let _ = std::fs::remove_file(&frame_path);
+    Err("ffmpeg failed to extract video frame".to_string())
+}
+
 /// 查找视频对应的封面图（支持 jpg/jpeg/webp/png）。
 ///
 /// 查找顺序：视频所在目录，然后是后端指定的副产物目录（`PP_SIDECAR_DIR`）。

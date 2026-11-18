@@ -11,7 +11,7 @@
 use crate::config::settings::exe_dir;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -90,11 +90,38 @@ pub fn modules_dir() -> PathBuf {
     exe_dir().join("modules")
 }
 
+/// 从模块二进制文件名解析版本号，例如 `notify_telegram_v050` → `50`。
+/// Parse a module binary's version from its file name, e.g. `notify_telegram_v050` → `50`.
+fn module_binary_version(path: &Path) -> u64 {
+    path.file_stem()
+        .and_then(|stem| stem.to_str())
+        .and_then(|name| name.rsplit_once("_v"))
+        .and_then(|(_, version)| version.parse().ok())
+        .unwrap_or(0)
+}
+
+/// 返回文件修改时间（Unix 秒），无法读取时返回 0。
+/// Return the file's modification time in Unix seconds, or 0 when unavailable.
+fn module_binary_mtime(path: &Path) -> u64 {
+    path.metadata()
+        .and_then(|meta| meta.modified())
+        .ok()
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0)
+}
+
 /// 扫描 modules/ 目录，发现所有可用的后处理模块。
 /// 对每个可执行文件调用 `--describe` 获取模块元数据。
 ///
+/// 同一模块 ID 可能因旧版本二进制残留而出现多次；这里只保留版本号最高的一份，
+/// 版本号相同时保留修改时间最新的，避免流水线绑定到旧模块。
+///
 /// Scan the modules/ directory to discover all available post-processing modules.
 /// Calls `--describe` on each executable to get module metadata.
+///
+/// A stale binary can make the same module ID appear more than once. Keep only the
+/// highest version (then the newest mtime) so a pipeline never binds to an old build.
 pub fn discover_modules() -> Vec<ModuleInfo> {
     let dir = modules_dir();
     if !dir.exists() {
@@ -106,7 +133,7 @@ pub fn discover_modules() -> Vec<ModuleInfo> {
         Err(_) => return vec![],
     };
 
-    let mut modules = Vec::new();
+    let mut candidates: Vec<(ModuleInfo, u64, u64)> = Vec::new();
 
     for entry in entries.flatten() {
         let path = entry.path();
@@ -131,12 +158,38 @@ pub fn discover_modules() -> Vec<ModuleInfo> {
 
         match describe_module(&path) {
             Ok(mut info) => {
+                let version = module_binary_version(&path);
+                let mtime = module_binary_mtime(&path);
                 info.exe_path = path;
-                modules.push(info);
+                candidates.push((info, version, mtime));
             }
             Err(e) => {
                 tracing::error!("Failed to describe module {:?}: {}", path, e);
             }
+        }
+    }
+
+    // 先按模块 ID 分组，再按版本号、修改时间倒序排列，最后每组只保留第一项。
+    // Group by module ID, sort by version then mtime descending, and keep the first of each.
+    candidates.sort_by(|a, b| {
+        a.0.id
+            .cmp(&b.0.id)
+            .then_with(|| b.1.cmp(&a.1))
+            .then_with(|| b.2.cmp(&a.2))
+            .then_with(|| a.0.exe_path.cmp(&b.0.exe_path))
+    });
+
+    let mut modules = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for (info, _version, _) in candidates {
+        if seen.insert(info.id.clone()) {
+            modules.push(info);
+        } else {
+            tracing::warn!(
+                "Ignoring stale {} module binary {} (a newer version is already loaded)",
+                info.id,
+                info.exe_path.display()
+            );
         }
     }
 

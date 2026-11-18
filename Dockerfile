@@ -99,6 +99,23 @@ RUN printf '%s\n' \
     '#!/bin/sh' \
     'set -eu' \
     '' \
+    '# contact_sheet was removed; delete any binary left in a persistent modules volume.' \
+    'rm -f /app/stripchat-recorder/modules/contact_sheet_v*' \
+    '' \
+    '# Remove older versions of built-in modules so a stale binary cannot win discovery.' \
+    'for current in /app/stripchat-recorder/modules.default/*; do' \
+    '    [ -f "$current" ] || continue' \
+    '    base=$(basename "$current")' \
+    '    case "$base" in' \
+    '        *_v*) prefix=${base%_v*} ;;' \
+    '        *) continue ;;' \
+    '    esac' \
+    '    for old in /app/stripchat-recorder/modules/${prefix}_v*; do' \
+    '        [ -f "$old" ] || continue' \
+    '        [ "$(basename "$old")" = "$base" ] || rm -f "$old"' \
+    '    done' \
+    'done' \
+    '' \
     'cp -an /app/stripchat-recorder/modules.default/. /app/stripchat-recorder/modules/' \
     '' \
     '# Override language from LANGUAGE env var if set (e.g. LANGUAGE=en-US)' \

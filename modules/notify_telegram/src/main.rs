@@ -80,7 +80,7 @@ use grammers_client::tl;
 use grammers_session::storages::SqliteSession;
 use grammers_session::types::{PeerAuth, PeerId, PeerKind, PeerRef};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncSeekExt, BufReader, SeekFrom};
-use pp_utils::{param, param_bool, format_duration, format_bytes, format_speed, parse_stem, tmp_dir, image_dimensions, video_meta};
+use pp_utils::{param, param_bool, format_duration, format_bytes, format_speed, parse_stem, tmp_dir, image_dimensions, video_meta, extract_video_frame};
 
 /// 进度上报的缩放基数 / Progress reporting scale base
 const PROGRESS_SCALE: usize = 10_000;
@@ -308,28 +308,6 @@ fn extract_video_thumbnail(input: &Path) -> Result<PathBuf, String> {
         return Err("ffmpeg failed to extract video thumbnail".to_string());
     }
     Ok(thumb_path)
-}
-
-/// 从视频中截取一帧画面作为封面图（始终在发送视频前使用，不再依赖 contact sheet）。
-///
-/// Extract a video frame as cover image (always used before sending the video; no contact sheet).
-fn extract_video_frame(input: &Path) -> Result<PathBuf, String> {
-    let stem = input.file_stem().and_then(|s| s.to_str()).unwrap_or("recording");
-    let frame_path = tmp_dir().join(format!("{}.tg_cover.jpg", stem));
-    let dur = pp_utils::video_duration(input).unwrap_or(0.0);
-    let ss = if dur > 10.0 { "5" } else if dur > 2.0 { "1" } else { "0" };
-    let status = Command::new("ffmpeg")
-        .args(["-y", "-ss", ss, "-i"])
-        .arg(input)
-        .args(["-frames:v", "1", "-q:v", "2"])
-        .arg(&frame_path)
-        .stdout(Stdio::null()).stderr(Stdio::null())
-        .status()
-        .map_err(|e| format!("ffmpeg not found: {}", e))?;
-    if !status.success() || !frame_path.exists() {
-        return Err("ffmpeg failed to extract video frame for cover".to_string());
-    }
-    Ok(frame_path)
 }
 
 /// 将视频文件按大小分割为多个片段（用于绕过 Telegram 2GB 文件大小限制）。
@@ -3527,7 +3505,7 @@ fn run() -> Result<(), String> {
     // 始终从视频中截取一帧作为封面图，不再查找 contact sheet。
     // Always extract one frame from the video as the cover image; never use a contact sheet.
     let (cover_path_buf, is_auto_cover) = if send_cover {
-        match extract_video_frame(&input) {
+        match extract_video_frame(&input, "tg_cover") {
             Ok(p) => {
                 eprintln!("extracted video frame as cover: {}", p.display());
                 (Some(p), true)

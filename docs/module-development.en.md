@@ -518,7 +518,7 @@ chmod +x ./data/modules/copy_to_dir
 
 After copying, the new module will appear in the Web UI under Settings → Post-processing Pipeline.
 
-> **Note:** On every container start, files from `modules.default` that do not yet exist in `modules` are copied in. Existing files are never overwritten, so custom modules and manually replaced built-in modules are preserved across restarts.
+> **Note:** On every container start, older versions of the built-in modules are removed, then files from `modules.default` that do not yet exist in `modules` are copied in. Custom modules are preserved, and each built-in module ID resolves to the newest shipped binary.
 
 ---
 
