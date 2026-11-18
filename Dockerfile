@@ -39,17 +39,21 @@ RUN curl -fsSL https://dl.google.com/dl/cloudsdk/channels/rapid/downloads/google
     && /opt/google-cloud-sdk/install.sh --quiet --usage-reporting false --path-update false --command-completion false \
     && rm /tmp/google-cloud-sdk.tar.gz
 
+# Optional crates.io mirror.  Leave empty for the official registry (GitHub
+# Actions runners have direct access).  Example for builds in China:
+#   --build-arg CARGO_REGISTRY_MIRROR=sparse+https://mirrors.ustc.edu.cn/crates.io-index/
+ARG CARGO_REGISTRY_MIRROR=""
+
 RUN mkdir -vp ${CARGO_HOME:-$HOME/.cargo} && \
-    printf '%s\n' \
-    '[source.crates-io]' \
-    "replace-with = 'ustc'" \
-    '' \
-    '[source.ustc]' \
-    'registry = "sparse+https://mirrors.ustc.edu.cn/crates.io-index/"' \
-    '' \
-    '[registries.ustc]' \
-    'index = "sparse+https://mirrors.ustc.edu.cn/crates.io-index/"' \
-    | tee -a ${CARGO_HOME:-$HOME/.cargo}/config.toml
+    if [ -n "$CARGO_REGISTRY_MIRROR" ]; then \
+      printf '%s\n' \
+      '[source.crates-io]' \
+      "replace-with = 'mirror'" \
+      '' \
+      '[source.mirror]' \
+      "registry = \"$CARGO_REGISTRY_MIRROR\"" \
+      | tee -a ${CARGO_HOME:-$HOME/.cargo}/config.toml; \
+    fi
 
 WORKDIR /app
 COPY . /app

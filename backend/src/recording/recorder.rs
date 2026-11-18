@@ -33,6 +33,16 @@ static FFMPEG_CONVERT_SEMAPHORE: LazyLock<Semaphore> = LazyLock::new(|| Semaphor
 /// Dedicated semaphore for long-running video merges so they never starve active segment conversions.
 static FFMPEG_MERGE_SEMAPHORE: LazyLock<Semaphore> = LazyLock::new(|| Semaphore::new(2));
 
+/// One segment download (including its retry) must finish within this window.
+/// HLS segments are only a few seconds long; if a request stalls longer than
+/// this, the live playlist has already rolled over and waiting further only
+/// loses more segments.
+const SEGMENT_DOWNLOAD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(8);
+
+/// Playlist responses are small; a hung fetch should fail and refresh instead
+/// of blocking the recording loop.
+const PLAYLIST_FETCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
 /// 单个录制会话的状态 / State of a single recording session
 #[derive(Debug, Clone)]
 pub struct RecordingSession {
@@ -829,7 +839,12 @@ impl RecorderManager {
         segment_file_index: &mut u64,
         emitter: &Arc<dyn Emitter>,
     ) -> Result<(usize, usize)> {
-        let playlist = api.fetch_playlist(playlist_url).await?;
+        let playlist = tokio::time::timeout(
+            PLAYLIST_FETCH_TIMEOUT,
+            api.fetch_playlist(playlist_url),
+        )
+        .await
+        .map_err(|_| AppError::Other("playlist fetch timed out".to_string()))??;
         let (segments, init_url) = parse_playlist(&playlist, url_prefix, mouflon_keys)?;
         let init_url_path = |u: &str| u.split('?').next().unwrap_or(u).to_string();
         let new_init_path = init_url.as_deref().map(init_url_path);
@@ -866,24 +881,36 @@ impl RecorderManager {
         {
             let mut fresh_header = None;
             for attempt in 0..3u64 {
-                match api.download_segment(url).await {
-                    Ok(data) if !data.is_empty() => {
+                let download = tokio::time::timeout(
+                    std::time::Duration::from_secs(4),
+                    api.download_segment(url),
+                )
+                .await;
+                match download {
+                    Ok(Ok(data)) if !data.is_empty() => {
                         fresh_header = Some(data);
                         break;
                     }
-                    Ok(_) => {
+                    Ok(Ok(_)) => {
                         tracing::warn!(
                             "Init segment for {} was empty (attempt {}/3)",
                             username,
                             attempt + 1
                         );
                     }
-                    Err(e) => {
+                    Ok(Err(e)) => {
                         tracing::warn!(
                             "Failed to download init segment for {} (attempt {}/3): {}",
                             username,
                             attempt + 1,
                             e
+                        );
+                    }
+                    Err(_) => {
+                        tracing::warn!(
+                            "Init segment download timed out for {} (attempt {}/3)",
+                            username,
+                            attempt + 1
                         );
                     }
                 }
@@ -961,18 +988,28 @@ impl RecorderManager {
             let api = Arc::clone(api);
             let url = seg.url.clone();
             join_set.spawn(async move {
-                let mut res = api.download_segment(&url).await;
-                if res.is_err() || res.as_ref().map(|d| d.len() <= 1000).unwrap_or(false) {
-                    for attempt in 1..=2 {
-                        tokio::time::sleep(tokio::time::Duration::from_millis(attempt * 150)).await;
-                        res = api.download_segment(&url).await;
-                        if let Ok(ref d) = res {
-                            if d.len() > 1000 {
-                                break;
+                let download = async {
+                    let mut res = api.download_segment(&url).await;
+                    if res.is_err() || res.as_ref().map(|d| d.len() <= 1000).unwrap_or(false) {
+                        for attempt in 1..=1 {
+                            tokio::time::sleep(tokio::time::Duration::from_millis(attempt * 150)).await;
+                            res = api.download_segment(&url).await;
+                            if let Ok(ref d) = res {
+                                if d.len() > 1000 {
+                                    break;
+                                }
                             }
                         }
                     }
-                }
+                    res
+                };
+                let res = match tokio::time::timeout(SEGMENT_DOWNLOAD_TIMEOUT, download).await {
+                    Ok(res) => res,
+                    Err(_) => Err(AppError::Other(format!(
+                        "segment download timed out after {}s",
+                        SEGMENT_DOWNLOAD_TIMEOUT.as_secs()
+                    ))),
+                };
                 (idx, res)
             });
         }
@@ -1033,23 +1070,34 @@ impl RecorderManager {
                                 segment.sequence
                             );
                             tokio::time::sleep(tokio::time::Duration::from_millis(250)).await;
-                            match api.download_segment(&segment.url).await {
-                                Ok(retry_data) if retry_data.len() > 1000 => {
+                            let retry = tokio::time::timeout(
+                                std::time::Duration::from_secs(5),
+                                api.download_segment(&segment.url),
+                            )
+                            .await;
+                            match retry {
+                                Ok(Ok(retry_data)) if retry_data.len() > 1000 => {
                                     conversion =
                                         convert_to_ts(build_fmp4(&retry_data), &ts_path).await;
                                 }
-                                Ok(retry_data) => {
+                                Ok(Ok(retry_data)) => {
                                     tracing::warn!(
                                         "Retried segment {} was too small ({} bytes)",
                                         segment.sequence,
                                         retry_data.len()
                                     );
                                 }
-                                Err(e) => {
+                                Ok(Err(e)) => {
                                     tracing::warn!(
                                         "Retried download failed for segment {}: {}",
                                         segment.sequence,
                                         e
+                                    );
+                                }
+                                Err(_) => {
+                                    tracing::warn!(
+                                        "Retried download timed out for segment {}",
+                                        segment.sequence
                                     );
                                 }
                             }
