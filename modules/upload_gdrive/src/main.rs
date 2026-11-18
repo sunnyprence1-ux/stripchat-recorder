@@ -90,11 +90,48 @@ fn gcloud_bin() -> PathBuf {
     }
 }
 
+/// Pass the server's proxy through to gcloud so token refresh works on VPSes
+/// where Google is only reachable through WARP.
+fn apply_gcloud_proxy(command: &mut Command) {
+    let Ok(proxy) = env::var("PP_GCLOUD_PROXY") else {
+        return;
+    };
+    let proxy = proxy.trim();
+    if proxy.is_empty() {
+        return;
+    }
+    let (scheme, rest) = match proxy.split_once("://") {
+        Some(parts) => parts,
+        None => return,
+    };
+    let proxy_type = if scheme.starts_with("socks") {
+        "socks5"
+    } else if scheme.eq_ignore_ascii_case("https") {
+        "https"
+    } else {
+        "http"
+    };
+    let authority = rest.split('/').next().unwrap_or(rest);
+    let (host, port) = match authority.rsplit_once(':') {
+        Some((host, port)) if port.chars().all(|c| c.is_ascii_digit()) => (host, port),
+        _ => return,
+    };
+    if host.is_empty() {
+        return;
+    }
+    command
+        .env("CLOUDSDK_PROXY_TYPE", proxy_type)
+        .env("CLOUDSDK_PROXY_ADDRESS", host)
+        .env("CLOUDSDK_PROXY_PORT", port)
+        .env("ALL_PROXY", proxy);
+}
+
 fn gcloud_command() -> Command {
     let mut command = Command::new(gcloud_bin());
     command
         .env("CLOUDSDK_CONFIG", gcloud_config_dir())
         .env("PYTHONUNBUFFERED", "1");
+    apply_gcloud_proxy(&mut command);
     command
 }
 

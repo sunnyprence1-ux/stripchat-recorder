@@ -1,11 +1,9 @@
 {
-  "name": "Google Drive 上传 0.1.0",
+  "name": "Google Drive 上传 0.2.0",
   "description": "把成片上传到 Google Drive，并按模特分文件夹",
   "params": {
-    "client_id": { "label": "Google OAuth Client ID" },
-    "client_secret": { "label": "Google OAuth Client Secret" },
     "root_folder": { "label": "Google Drive 里的根目录名称" },
-    "upload_cover": { "label": "如果存在封面图也一并上传" },
+    "upload_cover": { "label": "上传视频前先上传提取的封面帧" },
     "delete_after_send": { "label": "上传成功后删除本地视频" }
   }
 }

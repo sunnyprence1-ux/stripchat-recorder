@@ -669,14 +669,28 @@ struct LoginInputBody {
 ///
 /// Start the module's interactive login and return the first state
 /// (`ready` / `already` / `error`).
-async fn login_start(Json(body): Json<LoginStartBody>) -> ApiResult<serde_json::Value> {
+async fn login_start(
+    AxumState(s): AxumState<ServerState>,
+    Json(body): Json<LoginStartBody>,
+) -> ApiResult<serde_json::Value> {
+    let settings = s.app_state.get_settings();
+    // gcloud needs the same proxy as the rest of the server to reach Google.
+    let proxy_url = settings
+        .api_proxy_url
+        .clone()
+        .or_else(|| settings.cdn_proxy_url.clone());
     let update = tokio::task::spawn_blocking(move || {
         let module = crate::postprocess::pipeline::discover_modules()
             .into_iter()
             .find(|m| m.id == body.module_id);
         match module {
-            Some(m) => crate::postprocess::login::start_login(&m, &body.params, body.force)
-                .map_err(crate::core::error::AppError::Other),
+            Some(m) => crate::postprocess::login::start_login(
+                &m,
+                &body.params,
+                body.force,
+                proxy_url.as_deref(),
+            )
+            .map_err(crate::core::error::AppError::Other),
             None => Err(crate::core::error::AppError::Other(format!(
                 "模块 '{}' 不存在",
                 body.module_id

@@ -267,6 +267,7 @@ pub fn start_login(
     module: &ModuleInfo,
     params: &HashMap<String, serde_json::Value>,
     force: bool,
+    proxy_url: Option<&str>,
 ) -> Result<LoginUpdate, String> {
     if !module.loginable {
         return Err(format!("模块 '{}' 不支持登录", module.id));
@@ -285,6 +286,9 @@ pub fn start_login(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    if let Some(proxy) = proxy_url.filter(|value| !value.trim().is_empty()) {
+        cmd.env("PP_GCLOUD_PROXY", proxy);
+    }
 
     for (key, val) in params {
         let env_val = match val {

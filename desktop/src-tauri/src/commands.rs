@@ -471,7 +471,7 @@ pub async fn login_start(
             .into_iter()
             .find(|m| m.id == module_id);
         match module {
-            Some(m) => stripchat_recorder_lib::postprocess::login::start_login(&m, &params),
+            Some(m) => stripchat_recorder_lib::postprocess::login::start_login(&m, &params, false, None),
             None => Err(format!("模块 '{}' 不存在", module_id)),
         }
     })

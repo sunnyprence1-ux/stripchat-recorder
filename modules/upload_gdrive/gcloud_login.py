@@ -24,6 +24,7 @@ import shutil
 import subprocess
 import sys
 import time
+from urllib.parse import urlparse
 
 STATE_PREFIX = "LOGIN_STATE:"
 ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
@@ -62,6 +63,34 @@ def gcloud_env() -> dict[str, str]:
     env["CLOUDSDK_CONFIG"] = config_dir
     env["PYTHONUNBUFFERED"] = "1"
     env["TERM"] = "dumb"
+
+    # gcloud does not read the app's proxy settings automatically.  Without
+    # this it hangs trying to reach accounts.google.com directly on a VPS
+    # whose Google traffic must go through WARP.
+    proxy = os.environ.get("PP_GCLOUD_PROXY", "").strip()
+    if proxy:
+        try:
+            parsed = urlparse(proxy)
+            scheme = (parsed.scheme or "http").lower()
+            proxy_type = (
+                "socks5"
+                if scheme.startswith("socks")
+                else "https"
+                if scheme == "https"
+                else "http"
+            )
+            if parsed.hostname and parsed.port:
+                env["CLOUDSDK_PROXY_TYPE"] = proxy_type
+                env["CLOUDSDK_PROXY_ADDRESS"] = parsed.hostname
+                env["CLOUDSDK_PROXY_PORT"] = str(parsed.port)
+                env["ALL_PROXY"] = proxy
+                if proxy_type == "http":
+                    env["HTTP_PROXY"] = proxy
+                    env["HTTPS_PROXY"] = proxy
+                elif proxy_type == "https":
+                    env["HTTPS_PROXY"] = proxy
+        except ValueError:
+            pass
     return env
 
 
