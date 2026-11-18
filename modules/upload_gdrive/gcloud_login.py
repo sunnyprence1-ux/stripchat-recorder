@@ -7,7 +7,7 @@ their Google account, and paste the verification code back into the dashboard.
 
 The process speaks the same LOGIN_STATE line protocol as the Rust modules:
 
-    LOGIN_STATE:device:<url>|
+    LOGIN_STATE:device:<url>
     LOGIN_STATE:already:<email>
     LOGIN_STATE:done:<email>
     LOGIN_STATE:error:<message>
@@ -232,7 +232,7 @@ def main() -> int:
         state("error:Google login did not return a URL" + (": " + detail if detail else ""))
         return 1
 
-    state("device:" + url + "|")
+    state("device:" + url)
 
     code: str | None = None
     for line in sys.stdin:
