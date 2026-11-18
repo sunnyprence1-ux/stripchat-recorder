@@ -101,8 +101,9 @@ function ensureSse() {
 export async function call<T = unknown>(
 	command: string,
 	args?: Record<string, unknown>,
+	signal?: AbortSignal,
 ): Promise<T> {
-	return httpCall<T>(command, args);
+	return httpCall<T>(command, args, signal);
 }
 
 /**
@@ -306,6 +307,7 @@ const COMMAND_MAP: Record<
 async function httpCall<T>(
 	command: string,
 	args: Record<string, unknown> = {},
+	signal?: AbortSignal,
 ): Promise<T> {
 	const def = COMMAND_MAP[command];
 	if (!def) throw new Error(`Unknown command: ${command}`);
@@ -316,6 +318,7 @@ async function httpCall<T>(
 		method: def.method,
 		headers: hasBody ? { "Content-Type": "application/json" } : undefined,
 		body: hasBody ? JSON.stringify(def.body!(args)) : undefined,
+		signal,
 	});
 
 	if (!res.ok) {

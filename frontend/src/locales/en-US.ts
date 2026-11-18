@@ -230,7 +230,7 @@ export default {
 			title: "Sign in {name}",
 			description:
 				"Signs in with your own account and stores the session on the server. Credentials are only sent to the service you are signing in to.",
-			connecting: "Connecting to Telegram…",
+			connecting: "Starting sign-in…",
 			phoneLabel: "Phone number (international format)",
 			phonePlaceholder: "+8613800138000",
 			sendCode: "Send Code",

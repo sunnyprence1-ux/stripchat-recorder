@@ -405,18 +405,33 @@
 		showLogin.value = true;
 		loginRunning.value = true;
 
+		// The backend waits up to 180s for the module's first LOGIN_STATE line.
+		// Bound the request slightly longer so a hung module shows an error
+		// instead of leaving the dialog on "Starting sign-in…" forever.
+		const controller = new AbortController();
+		const timeout = setTimeout(() => controller.abort(), 200_000);
 		try {
 			applyLoginUpdate(
-				await call<LoginUpdate>("login_start", {
-					moduleId: node.moduleId,
-					params: { ...node.params },
-					force,
-				}),
+				await call<LoginUpdate>(
+					"login_start",
+					{
+						moduleId: node.moduleId,
+						params: { ...node.params },
+						force,
+					},
+					controller.signal,
+				),
 			);
 		} catch (e) {
 			loginState.value = "error";
-			loginDetail.value = e instanceof Error ? e.message : String(e);
+			loginDetail.value =
+				e instanceof Error && e.name === "AbortError"
+					? "Sign-in timed out. Check the server logs for the module error."
+					: e instanceof Error
+						? e.message
+						: String(e);
 		} finally {
+			clearTimeout(timeout);
 			loginRunning.value = false;
 		}
 	}

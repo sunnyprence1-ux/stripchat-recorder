@@ -186,7 +186,7 @@ export default {
 			title: "登录 {name}",
 			description:
 				"使用你自己的账号登录，并在本机生成会话文件。手机号和验证码只会发送给 Telegram。",
-			connecting: "正在连接 Telegram…",
+			connecting: "正在启动登录…",
 			phoneLabel: "手机号（国际格式）",
 			phonePlaceholder: "+8613800138000",
 			sendCode: "发送验证码",

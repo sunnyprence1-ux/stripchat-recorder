@@ -227,7 +227,7 @@ export default {
 			title: "登录 {name}",
 			description:
 				"使用你自己的账号登录，并把登录凭证保存在服务器上。凭证只会发送给你正在登录的服务。",
-			connecting: "正在连接 Telegram…",
+			connecting: "正在启动登录…",
 			phoneLabel: "手机号（国际格式）",
 			phonePlaceholder: "+8613800138000",
 			sendCode: "发送验证码",

@@ -186,7 +186,7 @@ export default {
 			title: "Sign in {name}",
 			description:
 				"Signs in with your own account and stores a session file on this device. Your phone number and login code are only sent to Telegram.",
-			connecting: "Connecting to Telegram…",
+			connecting: "Starting sign-in…",
 			phoneLabel: "Phone number (international format)",
 			phonePlaceholder: "+8613800138000",
 			sendCode: "Send Code",
