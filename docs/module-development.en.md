@@ -257,11 +257,6 @@ Recording done
 └─────────────┘
     │
     ▼  PP_INPUT=/recordings/alice_20240101_120000.ts
-┌──────────────┐
-│contact_sheet │ ── OUTPUT:/recordings/alice_20240101_120000.ts
-└──────────────┘
-    │
-    ▼  PP_INPUT=/recordings/alice_20240101_120000.ts
 ┌────────────────┐
 │ notify_discord │ ── OUTPUT:/recordings/alice_20240101_120000.ts
 └────────────────┘
@@ -534,9 +529,9 @@ The project ships four modules under `modules/`, which are automatically copied 
 | Module ID         | Description                                                                              |
 | ----------------- | ---------------------------------------------------------------------------------------- |
 | `filter_short`    | Requests the host to delete videos shorter than a threshold; supports `dry_run` preview mode |
-| `contact_sheet`   | Extracts frames at a set interval and tiles them into a timestamped preview image        |
-| `notify_discord`  | Sends recording info and cover image to Discord via Webhook; supports HTTP/SOCKS5 proxy  |
-| `notify_telegram` | Sends recording info, cover image, and video to Telegram via MTProto; auto-splits files over 2 GB |
+| `notify_discord`  | Sends recording info and an extracted video frame to Discord via Webhook; supports HTTP/SOCKS5 proxy |
+| `notify_telegram` | Sends recording info, an extracted video frame, and video to Telegram via MTProto; auto-splits files over 2 GB |
+| `upload_gdrive`   | Uploads finished videos to Google Drive, one folder per model                            |
 
 ### filter_short parameters
 
@@ -544,19 +539,6 @@ The project ships four modules under `modules/`, which are automatically copied 
 | -------------- | ------- | ------- | ---------------------------------------------- |
 | `min_duration` | number  | `60`    | Minimum duration in seconds; shorter files are deleted |
 | `dry_run`      | boolean | `false` | Preview only, no actual deletion               |
-
-### contact_sheet parameters
-
-| Parameter    | Type   | Default | Description                                      |
-| ------------ | ------ | ------- | ------------------------------------------------ |
-| `interval`   | number | `30`    | Frame extraction interval (seconds)              |
-| `thumb_width`| number | `320`   | Thumbnail width (px)                             |
-| `format`     | select | `webp`  | Image format: `webp`, `jpg`, or `png`            |
-| `quality`    | number | `100`   | Image quality (1–100, applies to jpg/webp)       |
-| `cols`       | number | `0`     | Number of columns; `0` = auto                   |
-| `rows`       | number | `0`     | Number of rows; `0` = auto                      |
-| `fontfile`   | string | `""`    | Font file path; leave empty for auto-detection  |
-| `fontsize`   | number | `18`    | Timestamp font size                              |
 
 ### notify_discord parameters
 
@@ -608,5 +590,5 @@ ceiling, so the gain is largest when round-trip time dominates (long-haul VPS, p
 - Modules should be **stateless** and not rely on any residual state from previous executions.
 - Modules should not modify or delete files other than `PP_INPUT` unless that is their explicit purpose (e.g. `filter_short`).
 - If a module needs temporary files, use `PP_EXE_DIR/tmp/` and clean up before exiting.
-- If a module produces side outputs (contact sheets, etc.), write them to `PP_SIDECAR_DIR` (falling back to the input video's directory when unset) rather than the finished-video directory.
+- If a module produces side outputs, write them to `PP_SIDECAR_DIR` (falling back to the input video's directory when unset) rather than the finished-video directory.
 - Modules must complete within a reasonable time; prolonged absence of progress output may cause the UI to appear stalled.

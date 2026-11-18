@@ -1047,51 +1047,13 @@ async fn serve_output_file(
 }
 
 async fn get_module_outputs(
-    AxumState(s): AxumState<ServerState>,
+    AxumState(_s): AxumState<ServerState>,
     Json(body): Json<PathBody>,
 ) -> ApiResult<serde_json::Value> {
-    let video_path = std::path::Path::new(&body.path);
-    let pipeline = s.app_state.get_pipeline();
-    let mut outputs: std::collections::HashMap<String, String> = std::collections::HashMap::new();
-
-    for node in &pipeline.nodes {
-        if !node.enabled {
-            continue;
-        }
-        if node.module_id == "contact_sheet" {
-            let format = node
-                .params
-                .get("format")
-                .and_then(|v: &serde_json::Value| v.as_str())
-                .unwrap_or("webp");
-            if let Some(stem) = video_path.file_stem().and_then(|s| s.to_str()) {
-                // 副产物写在输出目录（副产物目录）；成片同目录为旧布局回退
-                // Side outputs live in the output dir (sidecar dir); the video dir is a legacy fallback
-                let settings = s.app_state.get_settings();
-                let mut dirs: Vec<std::path::PathBuf> = Vec::new();
-                if let Some(dir) = settings.sidecar_dir_for_video(video_path) {
-                    dirs.push(dir);
-                }
-                if let Some(parent) = video_path.parent()
-                    && !dirs.iter().any(|d| d == parent)
-                {
-                    dirs.push(parent.to_path_buf());
-                }
-                let found = dirs
-                    .into_iter()
-                    .map(|dir| dir.join(format!("{}.{}", stem, format)))
-                    .find(|p| p.exists());
-                if let Some(img_path) = found {
-                    outputs.insert(
-                        node.module_id.clone(),
-                        img_path.to_string_lossy().to_string(),
-                    );
-                }
-            }
-        }
-    }
-
-    Ok(Json(serde_json::to_value(outputs).unwrap()))
+    let _ = body;
+    // 目前没有模块会生成可在录制列表中预览的副产物。
+    // No module currently produces a side output that can be previewed from the recordings list.
+    Ok(Json(serde_json::json!({})))
 }
 
 /// 返回指定语言代码的完整 locale 数据（主程序翻译 + 所有模块翻译覆盖）。

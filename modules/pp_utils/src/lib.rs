@@ -273,14 +273,14 @@ pub fn sidecar_dir() -> Option<PathBuf> {
 /// 查找视频对应的封面图（支持 jpg/jpeg/webp/png）。
 ///
 /// 查找顺序：视频所在目录，然后是后端指定的副产物目录（`PP_SIDECAR_DIR`）。
-/// 成片与副产物分开存放时（`final_video_dir` 与输出目录不同），联系表截图只存在于
+/// 成片与副产物分开存放时（`final_video_dir` 与输出目录不同），封面图只存在于
 /// 副产物目录里，只看视频同目录会漏掉它。
 ///
 /// Find the cover image for a video (supports jpg/jpeg/webp/png).
 ///
 /// Search order: the video's own directory first, then the host-provided side-output
 /// directory (`PP_SIDECAR_DIR`). When finished videos and side outputs live apart
-/// (`final_video_dir` differs from the output directory) the contact sheet only exists in
+/// (`final_video_dir` differs from the output directory) the cover image only exists in
 /// the side-output directory, so looking beside the video alone would miss it.
 ///
 /// # 返回值 / Returns
@@ -516,8 +516,8 @@ mod tests {
         assert_eq!(find_cover(&video), Some(cover));
     }
 
-    /// 成片与副产物分开存放时，联系表只在副产物目录里，也必须找得到。
-    /// With videos and side outputs split apart the contact sheet only lives in the sidecar
+    /// 成片与副产物分开存放时，封面图只在副产物目录里，也必须找得到。
+    /// With videos and side outputs split apart the cover image only lives in the sidecar
     /// dir, and it must still be found.
     #[test]
     fn cover_in_the_sidecar_dir_is_found() {

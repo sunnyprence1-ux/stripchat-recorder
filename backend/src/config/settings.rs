@@ -395,8 +395,8 @@ impl Settings {
         Some(parent.join(format!(".{}.json", stem)))
     }
 
-    /// 模块副产物（联系表图片等）应写入的目录：与元数据文件同目录，即输出目录。
-    /// Directory where module side outputs (contact sheets etc.) should be written:
+    /// 模块副产物应写入的目录：与元数据文件同目录，即输出目录。
+    /// Directory where module side outputs should be written:
     /// the directory of the metadata file, i.e. the output directory.
     pub fn sidecar_dir_for_video(&self, video_path: &std::path::Path) -> Option<PathBuf> {
         self.meta_path_for_video(video_path)
@@ -602,9 +602,19 @@ impl AppState {
         let mouflon_keys: MouflonKeysStore = load_json("mouflon_keys.json")
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default();
-        let pipeline: PipelineConfig = load_json("pipeline.json")
+        let mut pipeline: PipelineConfig = load_json("pipeline.json")
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default();
+        // contact_sheet 已被移除：丢弃旧流水线中的该节点，避免启动后因缺少模块而中断。
+        // contact_sheet has been removed: drop that node from old pipelines so it cannot
+        // abort a run because the module no longer exists.
+        let before_nodes = pipeline.nodes.len();
+        pipeline.nodes.retain(|node| node.module_id != "contact_sheet");
+        if pipeline.nodes.len() != before_nodes {
+            if let Ok(json) = serde_json::to_string_pretty(&pipeline) {
+                let _ = fs::write(config_dir.join("pipeline.json"), json);
+            }
+        }
         // pp_results.json 存储已执行过后处理的视频路径列表（Vec<String>）
         // 兼容旧格式（HashMap<String, bool>）：若解析为 Vec 失败，尝试解析为旧格式并提取 keys
         // pp_results.json stores a list of video paths that have been post-processed (Vec<String>)

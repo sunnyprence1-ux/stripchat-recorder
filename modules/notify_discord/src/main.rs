@@ -11,8 +11,8 @@
 //! - 标准输出 `STATUS:{speed}`: 上传速度上报 / Upload speed reporting
 
 use pp_utils::{
-    emit_progress_step, find_cover, format_bytes, format_duration, format_speed, param, parse_stem,
-    tmp_dir, video_duration, PROGRESS_SCALE,
+    emit_progress_step, format_bytes, format_duration, format_speed, param, parse_stem, tmp_dir,
+    video_duration, PROGRESS_SCALE,
 };
 use socket2::{Domain, Socket, Type};
 use std::env;
@@ -86,6 +86,37 @@ fn resize_cover_for_discord(img: &Path) -> Result<Option<PathBuf>, String> {
     }
 
     Err("cover image exceeds Discord 10 MB limit even after compression".to_string())
+}
+
+/// 从视频中截取一帧作为封面图，不再依赖 contact sheet。
+/// Extract one frame from the video as the cover image; no contact sheet is used.
+fn extract_video_frame(input: &Path) -> Result<PathBuf, String> {
+    let stem = input
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("recording");
+    let frame_path = tmp_dir().join(format!("{}.dc_cover.jpg", stem));
+    let duration = video_duration(input).unwrap_or(0.0);
+    let seek = if duration > 10.0 {
+        "5"
+    } else if duration > 2.0 {
+        "1"
+    } else {
+        "0"
+    };
+    let status = Command::new("ffmpeg")
+        .args(["-y", "-ss", seek, "-i"])
+        .arg(input)
+        .args(["-frames:v", "1", "-q:v", "2"])
+        .arg(&frame_path)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map_err(|e| format!("ffmpeg not found: {}", e))?;
+    if !status.success() || !frame_path.exists() {
+        return Err("ffmpeg failed to extract video frame for cover".to_string());
+    }
+    Ok(frame_path)
 }
 
 /// 解析 URL，返回 (host, port, path)
@@ -646,7 +677,7 @@ fn run() -> Result<(), String> {
 
     emit_progress_step(1, 3);
 
-    let cover = find_cover(&input);
+    let cover = extract_video_frame(&input).ok();
 
     // 若封面图超过 Discord 10MB 限制则压缩 / Compress cover if it exceeds Discord's 10 MB limit
     let effective_cover: Option<PathBuf> = if let Some(ref img) = cover {
@@ -688,6 +719,9 @@ fn run() -> Result<(), String> {
     }
 
     emit_progress_step(3, 3);
+    if let Some(ref cover) = cover {
+        let _ = fs::remove_file(cover);
+    }
     println!("OUTPUT:{}", input.display());
     Ok(())
 }

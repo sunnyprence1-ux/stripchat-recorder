@@ -6,7 +6,6 @@
     - 磁盘空间监控
     - 文件合并进度跟踪
     - 后处理流水线触发和进度显示
-    - Contact Sheet 预览图查看（带缩放/平移）
     - 单文件、批量和删除全部视频
     - 后处理全部视频
     - 多列排序和分组折叠
@@ -16,7 +15,6 @@
     - Disk space monitoring
     - File merge progress tracking
     - Post-processing pipeline triggering and progress display
-    - Contact Sheet preview image viewing (with zoom/pan)
     - Single, batch, and delete-all video actions
     - Post-process all videos
     - Multi-column sorting and group collapsing
@@ -34,7 +32,7 @@
 	import { Button } from "@/components/ui/button";
 	import { Badge } from "@/components/ui/badge";
 	import { Checkbox } from "@/components/ui/checkbox";
-	import { Loader2, Image, Send } from "@lucide/vue";
+	import { Loader2, Send } from "@lucide/vue";
 	import { Progress } from "@/components/ui/progress";
 	import {
 		Dialog,
@@ -191,11 +189,11 @@
 	/**
 	 * 从当前 files.value 列表中同步模块输出路径到 moduleOutputs。
 	 * 仅补充缺失的条目，不覆盖已有的（如推断值或实时更新值）。
-	 * 用于 load() 之后确保 contact_sheet 等预览图按钮能正确显示。
+	 * 用于 load() 之后同步模块副产物路径。
 	 *
 	 * Sync module output paths from the current files.value list into moduleOutputs.
 	 * Only fills in missing entries; does not overwrite existing ones (e.g. inferred or live-updated values).
-	 * Called after load() to ensure preview buttons (e.g. contact_sheet) are correctly shown.
+	 * Called after load() to sync module side-output paths.
 	 */
 	function syncModuleOutputsFromFiles() {
 		for (const f of files.value) {
@@ -228,7 +226,6 @@
 		onPreviewMousedown,
 		onDocMousemove,
 		onDocMouseup,
-		openPreview,
 	} = preview;
 
 	/**
@@ -237,19 +234,6 @@
 	 */
 	async function openFile(path: string) {
 		await call("open_recording", { path });
-	}
-
-	/**
-	 * 打开模块输出文件（使用预览弹窗）。
-	 * Open module output file (preview dialog).
-	 */
-	async function openModuleOutput(filePath: string, moduleId: string) {
-		const outputPath = moduleOutputs.value[filePath]?.[moduleId];
-		if (!outputPath) return;
-		openPreview(
-			`/api/files?path=${encodeURIComponent(outputPath)}`,
-			outputPath.split(/[\\/]/).pop() ?? "预览图",
-		);
 	}
 
 	/**
@@ -1463,16 +1447,6 @@
 												@click="openFile(f.path)"
 												>{{ t("recordings.actions.play") }}</Button
 											>
-											<Button
-												v-if="moduleOutputs[f.path]?.['contact_sheet']"
-												size="sm"
-												variant="outline"
-												:title="t('recordings.actions.preview')"
-												:aria-label="t('recordings.actions.preview')"
-												@click="openModuleOutput(f.path, 'contact_sheet')"
-											>
-												<Image class="size-3.5" />
-											</Button>
 											<Button
 												size="sm"
 												variant="outline"

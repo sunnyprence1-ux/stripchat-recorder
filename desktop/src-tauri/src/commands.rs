@@ -640,34 +640,10 @@ pub async fn read_output_file(
 /// 获取模块输出路径 / Get module output paths
 #[tauri::command]
 pub async fn get_module_outputs(
-    path: String,
-    state: State<'_, DesktopState>,
+    _path: String,
+    _state: State<'_, DesktopState>,
 ) -> CmdResult<serde_json::Value> {
-    let video_path = std::path::Path::new(&path);
-    let pipeline = state.app_state.get_pipeline();
-    let mut outputs: std::collections::HashMap<String, String> = std::collections::HashMap::new();
-
-    for node in &pipeline.nodes {
-        if !node.enabled {
-            continue;
-        }
-        if node.module_id == "contact_sheet" {
-            let format = node
-                .params
-                .get("format")
-                .and_then(|v| v.as_str())
-                .unwrap_or("webp");
-            if let (Some(parent), Some(stem)) = (
-                video_path.parent(),
-                video_path.file_stem().and_then(|s| s.to_str()),
-            ) {
-                let img_path = parent.join(format!("{}.{}", stem, format));
-                if img_path.exists() {
-                    outputs.insert(node.module_id.clone(), img_path.to_string_lossy().to_string());
-                }
-            }
-        }
-    }
-
-    Ok(serde_json::to_value(outputs).unwrap())
+    // 目前没有模块会生成可在录制列表中预览的副产物。
+    // No module currently produces a side output that can be previewed from the recordings list.
+    Ok(serde_json::json!({}))
 }

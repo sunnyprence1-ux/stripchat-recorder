@@ -176,8 +176,8 @@ pub fn send_defaults(state: &AppState) -> SendDefaults {
         // Match the module: the caption is off by default, so only the video is uploaded
         send_caption: param_bool(&params, "send_caption", false),
         send_cover: param_bool(&params, "send_cover", true),
-        // 与模块保持一致：默认先把联系表作为图片发出去，再发视频
-        // Match the module: the contact sheet is posted as an image before the video by default
+        // 与模块保持一致：默认先把视频截帧作为图片发出去，再发视频
+        // Match the module: an extracted video frame is posted as an image before the video by default
         cover_first: param_bool(&params, "cover_first", true),
         batch_size: params.get("batch_size").and_then(|v| v.as_u64()).map(|n| n as u32).unwrap_or(3),
         account,

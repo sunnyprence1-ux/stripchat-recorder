@@ -6,7 +6,6 @@
     - 磁盘空间监控
     - 文件合并进度跟踪
     - 后处理流水线触发和进度显示
-    - Contact Sheet 预览图查看（带缩放/平移）
     - 单文件和批量删除
     - 多列排序和分组折叠
 
@@ -15,7 +14,6 @@
     - Disk space monitoring
     - File merge progress tracking
     - Post-processing pipeline triggering and progress display
-    - Contact Sheet preview image viewing (with zoom/pan)
     - Single and batch file deletion
     - Multi-column sorting and group collapsing
 -->
@@ -30,7 +28,7 @@
 	import { Button } from "@/components/ui/button";
 	import { Badge } from "@/components/ui/badge";
 	import { Checkbox } from "@/components/ui/checkbox";
-	import { Loader2, Image } from "@lucide/vue";
+	import { Loader2 } from "@lucide/vue";
 	import { Progress } from "@/components/ui/progress";
 	import {
 		Dialog,
@@ -133,11 +131,11 @@
 	/**
 	 * 从当前 files.value 列表中同步模块输出路径到 moduleOutputs。
 	 * 仅补充缺失的条目，不覆盖已有的（如推断值或实时更新值）。
-	 * 用于 load() 之后确保 contact_sheet 等预览图按钮能正确显示。
+	 * 用于 load() 之后同步模块副产物路径。
 	 *
 	 * Sync module output paths from the current files.value list into moduleOutputs.
 	 * Only fills in missing entries; does not overwrite existing ones (e.g. inferred or live-updated values).
-	 * Called after load() to ensure preview buttons (e.g. contact_sheet) are correctly shown.
+	 * Called after load() to sync module side-output paths.
 	 */
 	function syncModuleOutputsFromFiles() {
 		for (const f of files.value) {
@@ -170,7 +168,6 @@
 		onPreviewMousedown,
 		onDocMousemove,
 		onDocMouseup,
-		openPreview,
 	} = preview;
 
 	/**
@@ -179,24 +176,6 @@
 	 */
 	async function openFile(path: string) {
 		await call("open_recording", { path });
-	}
-
-	/**
-	 * 打开模块输出文件（使用预览弹窗）。
-	 * Tauri 版：通过 invoke 读取文件为 base64 data URL 后显示。
-	 *
-	 * Open module output file (preview dialog).
-	 * Tauri version: reads file as base64 data URL via invoke.
-	 */
-	async function openModuleOutput(filePath: string, moduleId: string) {
-		const outputPath = moduleOutputs.value[filePath]?.[moduleId];
-		if (!outputPath) return;
-		try {
-			const result = await call<{ data: string }>("read_output_file", { path: outputPath });
-			openPreview(result.data, outputPath.split(/[\\/]/).pop() ?? "预览图");
-		} catch (e) {
-			toast(String(e), "error");
-		}
 	}
 
 	/**
@@ -1094,15 +1073,6 @@
 												@click="openFile(f.path)"
 												>{{ t("recordings.actions.play") }}</Button
 											>
-											<Button
-												v-if="moduleOutputs[f.path]?.['contact_sheet']"
-												size="sm"
-												variant="outline"
-												title="查看 Contact Sheet 预览图"
-												@click="openModuleOutput(f.path, 'contact_sheet')"
-											>
-												<Image class="size-3.5" />
-											</Button>
 											<Button
 												size="sm"
 												variant="outline"

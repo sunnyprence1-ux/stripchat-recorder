@@ -4,13 +4,13 @@
  * 管理录制文件的后处理流水线执行状态和进度，包括：
  * - 任务状态跟踪（空闲/等待/运行/完成/错误）
  * - 整体进度和当前模块进度计算
- * - 模块输出路径推断（如 contact_sheet 预览图路径）
+ * - 模块输出路径推断
  * - 页面刷新后从后端恢复任务状态
  *
  * Manages post-processing pipeline execution state and progress for recording files, including:
  * - Task status tracking (idle/waiting/running/done/error)
  * - Overall and per-module progress calculation
- * - Module output path inference (e.g., contact_sheet preview image path)
+ * - Module output path inference
  * - Restoring task state from backend after page refresh
  */
 
@@ -183,31 +183,14 @@ export function usePostprocess() {
 	 * 根据当前流水线配置推断模块输出路径（无需请求后端）。
 	 * Infer module output paths from the current pipeline config (without requesting backend).
 	 *
-	 * @param videoPath - 视频文件路径 / Video file path
+	 * 目前没有模块会生成可在录制列表中预览的副产物。
+	 * No module currently produces a side output that can be previewed from the recordings list.
+	 *
+	 * @param _videoPath - 视频文件路径 / Video file path
 	 * @returns 模块 ID -> 输出路径 的映射 / Map of module ID -> output path
 	 */
-	function inferModuleOutputs(videoPath: string): Record<string, string> {
-		const outputs: Record<string, string> = {};
-		const pipeline = ppStore.pipeline;
-		if (!pipeline?.nodes) return outputs;
-		// 兼容 Windows 和 Unix 路径分隔符 / Handle both Windows and Unix path separators
-		const sep = videoPath.includes("\\") ? "\\" : "/";
-		const parts = videoPath.split(sep);
-		const filename = parts[parts.length - 1];
-		const dir = parts.slice(0, -1).join(sep);
-		const stem = filename.includes(".")
-			? filename.slice(0, filename.lastIndexOf("."))
-			: filename;
-		for (const node of pipeline.nodes) {
-			if (!node.enabled) continue;
-			// contact_sheet 模块：输出与视频同名的图片文件
-			// contact_sheet module: outputs an image file with the same name as the video
-			if (node.moduleId === "contact_sheet") {
-				const format = (node.params?.format as string) ?? "webp";
-				outputs["contact_sheet"] = `${dir}${sep}${stem}.${format}`;
-			}
-		}
-		return outputs;
+	function inferModuleOutputs(_videoPath: string): Record<string, string> {
+		return {};
 	}
 
 	/**
@@ -344,10 +327,10 @@ export function usePostprocess() {
 				toast(t("usePostprocess.done", { modules: names }), "success");
 			}
 			// NodeResult.output 字段在序列化时被 #[serde(skip)] 跳过，前端无法直接获取。
-			// 使用 inferModuleOutputs 根据流水线配置推断输出路径（如 contact_sheet 图片路径）。
+			// 使用 inferModuleOutputs 根据流水线配置推断输出路径。
 			// NodeResult.output is skipped during serialization (#[serde(skip)]), so the frontend
 			// cannot access it directly. Use inferModuleOutputs to derive output paths from the
-			// pipeline config (e.g., the contact_sheet image path).
+			// pipeline config.
 			const inferred = inferModuleOutputs(payload.path);
 			if (Object.keys(inferred).length > 0) {
 				moduleOutputs.value = {

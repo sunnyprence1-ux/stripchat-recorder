@@ -1,10 +1,14 @@
-use pp_utils::{emit_progress, find_cover, format_bytes, format_speed, param, param_bool, parse_stem};
+use pp_utils::{
+    emit_progress, format_bytes, format_speed, param, param_bool, parse_stem, tmp_dir,
+    video_duration,
+};
 use reqwest::blocking::{Client, Response};
 use serde_json::{json, Value};
 use std::env;
 use std::fs::{self, File};
 use std::io::{BufRead, Read, Write};
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const DESCRIBE: &str = r#"{
@@ -436,6 +440,35 @@ fn mime_type(path: &Path) -> String {
     .to_string()
 }
 
+fn extract_video_frame(input: &Path) -> Result<PathBuf, String> {
+    let stem = input
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("recording");
+    let frame_path = tmp_dir().join(format!("{}.gdrive_cover.jpg", stem));
+    let dur = video_duration(input).unwrap_or(0.0);
+    let ss = if dur > 10.0 {
+        "5"
+    } else if dur > 2.0 {
+        "1"
+    } else {
+        "0"
+    };
+    let status = Command::new("ffmpeg")
+        .args(["-y", "-ss", ss, "-i"])
+        .arg(input)
+        .args(["-frames:v", "1", "-q:v", "2"])
+        .arg(&frame_path)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map_err(|e| format!("ffmpeg not found: {}", e))?;
+    if !status.success() || !frame_path.exists() {
+        return Err("ffmpeg failed to extract video frame for cover".to_string());
+    }
+    Ok(frame_path)
+}
+
 fn emit_upload_progress(done: u64, total: u64) {
     let scaled = if total == 0 {
         0
@@ -612,7 +645,32 @@ fn run() -> Result<(), String> {
     let model_id = ensure_folder(&client, &token, &model_folder, Some(&root_id))?;
 
     emit_progress(0, 100);
-    let uploaded = upload_file(&client, &token, &input, &model_id)?;
+
+    // 先从视频中截取一帧，并先于视频上传；不再查找 contact sheet。
+    // Extract one video frame first and upload it before the video; never use a contact sheet.
+    let cover_path = if param_bool("upload_cover", true) {
+        match extract_video_frame(&input) {
+            Ok(path) => Some(path),
+            Err(e) => {
+                eprintln!("Google Drive: could not extract cover frame: {}", e);
+                None
+            }
+        }
+    } else {
+        None
+    };
+    if let Some(ref cover) = cover_path {
+        match upload_file(&client, &token, cover, &model_id) {
+            Ok(_) => eprintln!("Google Drive: cover frame uploaded first"),
+            Err(e) => eprintln!("Google Drive: cover frame upload failed: {}", e),
+        }
+    }
+
+    let upload_result = upload_file(&client, &token, &input, &model_id);
+    if let Some(cover) = cover_path {
+        let _ = fs::remove_file(cover);
+    }
+    let uploaded = upload_result?;
     let uploaded_name = uploaded
         .get("name")
         .and_then(|v| v.as_str())
@@ -623,11 +681,6 @@ fn run() -> Result<(), String> {
         uploaded_name,
         format_bytes(uploaded_size)
     );
-    if param_bool("upload_cover", true) {
-        if let Some(cover) = find_cover(&input) {
-            let _ = upload_file(&client, &token, &cover, &model_id)?;
-        }
-    }
     emit_progress(100, 100);
 
     println!("OUTPUT:{}", input.display());

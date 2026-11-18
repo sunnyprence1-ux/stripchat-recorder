@@ -20,13 +20,13 @@ Translations are now loaded from **JSON files on disk** rather than being compil
         ├── filter_short/
         │   ├── zh-CN.json
         │   └── en-US.json
-        ├── contact_sheet/
-        │   ├── zh-CN.json
-        │   └── en-US.json
         ├── notify_discord/
         │   ├── zh-CN.json
         │   └── en-US.json
-        └── notify_telegram/
+        ├── notify_telegram/
+        │   ├── zh-CN.json
+        │   └── en-US.json
+        └── upload_gdrive/
             ├── zh-CN.json
             └── en-US.json
 ```

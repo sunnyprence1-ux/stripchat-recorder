@@ -150,7 +150,7 @@ export default {
 		actions: {
 			play: "Play",
 			playDisabled: "Cannot play while recording",
-			preview: "Contact Sheet preview",
+			preview: "Preview",
 			postprocess: "Post-process",
 			delete: "Delete",
 			deleteDisabled: "File is being recorded",
@@ -448,10 +448,10 @@ export default {
 		usernamePlaceholder: "mygroup (public groups only)",
 		sendVideo: "Also send the video file",
 		sendCover: "Also send the cover image",
-		sendCoverHint: "The contact-sheet preview image. Turn it off to post the video on its own.",
+		sendCoverHint: "A frame extracted from the video. Turn it off to post the video on its own.",
 		coverFirst: "Post the cover image first, then the video",
 		coverFirstHint:
-			"The contact sheet goes out as its own image message, then the video follows as a separate message. Off: both are posted together as one album.",
+			"The extracted video frame goes out as its own image message, then the video follows as a separate message. Off: both are posted together as one album.",
 		sendCaption: "Attach text caption",
 		sendCaptionHint:
 			"Model name, timestamp, duration, file name and size. Off by default — the video is posted with no text at all.",

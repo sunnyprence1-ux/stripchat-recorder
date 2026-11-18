@@ -255,11 +255,6 @@ PP_INPUT=<path>  PP_PARAM_<KEY>=<value> ...  ./<module_binary>
 └─────────────┘
     │
     ▼  PP_INPUT=/recordings/alice_20240101_120000.ts
-┌──────────────┐
-│contact_sheet │ ── OUTPUT:/recordings/alice_20240101_120000.ts
-└──────────────┘
-    │
-    ▼  PP_INPUT=/recordings/alice_20240101_120000.ts
 ┌────────────────┐
 │ notify_discord │ ── OUTPUT:/recordings/alice_20240101_120000.ts
 └────────────────┘
@@ -532,9 +527,9 @@ chmod +x ./data/modules/copy_to_dir
 | 模块 ID           | 说明                                                                 |
 | ----------------- | -------------------------------------------------------------------- |
 | `filter_short`    | 请求主程序删除时长低于阈值的视频，支持 `dry_run` 预览模式            |
-| `contact_sheet`   | 按指定间隔截帧，拼合成带时间戳水印的预览图，保存到视频同目录         |
-| `notify_discord`  | 将录制信息和封面图通过 Webhook 发送到 Discord，支持 HTTP/SOCKS5 代理 |
-| `notify_telegram` | 通过 MTProto 将录制信息、封面图和视频发送到 Telegram，支持超过 2GB 的大文件自动分割 |
+| `notify_discord`  | 将录制信息和视频截帧封面通过 Webhook 发送到 Discord，支持 HTTP/SOCKS5 代理 |
+| `notify_telegram` | 通过 MTProto 将录制信息、视频截帧封面和视频发送到 Telegram，支持超过 2GB 的大文件自动分割 |
+| `upload_gdrive`   | 把成片上传到 Google Drive，并按模特分文件夹                          |
 
 ### filter_short 参数
 
@@ -542,19 +537,6 @@ chmod +x ./data/modules/copy_to_dir
 | -------------- | ------- | ------ | ---------------------------- |
 | `min_duration` | number  | `60`   | 最短时长（秒），低于此值删除 |
 | `dry_run`      | boolean | `false`| 仅预览，不实际删除           |
-
-### contact_sheet 参数
-
-| 参数         | 类型   | 默认值  | 说明                                   |
-| ------------ | ------ | ------- | -------------------------------------- |
-| `interval`   | number | `30`    | 截帧间隔（秒）                         |
-| `thumb_width`| number | `320`   | 单帧宽度（px）                         |
-| `format`     | select | `webp`  | 图片格式：`webp`、`jpg`、`png`         |
-| `quality`    | number | `100`   | 图片质量（1-100，jpg/webp 有效）       |
-| `cols`       | number | `0`     | 列数，`0` 为自动                       |
-| `rows`       | number | `0`     | 行数，`0` 为自动                       |
-| `fontfile`   | string | `""`    | 字体文件路径，留空自动检测             |
-| `fontsize`   | number | `18`    | 时间戳字号                             |
 
 ### notify_discord 参数
 
@@ -576,7 +558,7 @@ chmod +x ./data/modules/copy_to_dir
 | `proxy`       | string  | `""`    | 代理地址，支持 `http://`、`socks5://`             |
 | `send_video`  | boolean | `true`  | 是否同时发送视频文件                              |
 | `send_caption` | boolean | `false` | 是否在视频消息里附带文字说明（模特名、时间、时长、文件名、大小）。默认关闭：只发视频，消息里没有任何文字 |
-| `send_cover`  | boolean | `true`  | 是否同时发送封面图（联系表截图）。关闭后相册里只有视频 |
+| `send_cover`  | boolean | `true`  | 是否同时发送封面图（从视频截取的一帧）。关闭后相册里只有视频 |
 | `cover_first` | boolean | `true`  | 是否先把封面图单独作为一条图片消息发出，再上传并发送视频。关闭后封面图和视频合在同一条相册消息里 |
 | `topic_per_model` | boolean | `true` | 按模特名自动创建/复用群组话题（Topic），视频发送到对应话题；群组需为论坛模式且 Bot 具备「管理话题」权限 |
 | `delete_after_send` | boolean | `true` | 发送成功后请求主程序删除本地数据（成片、分片目录、元数据、模块副产物），释放服务器空间 |
@@ -604,5 +586,5 @@ chmod +x ./data/modules/copy_to_dir
 - 模块应为**无状态**的，不依赖上次执行的任何残留状态。
 - 模块不应修改或删除 `PP_INPUT` 以外的文件，除非这是其明确功能（如 `filter_short`）。
 - 若模块需要临时文件，建议使用 `PP_EXE_DIR/tmp/` 目录，并在退出前清理。
-- 若模块会生成副产物（如联系表图片），请写入 `PP_SIDECAR_DIR`（未设置时回退到输入视频所在目录），不要写入成片所在目录。
+- 若模块会生成副产物，请写入 `PP_SIDECAR_DIR`（未设置时回退到输入视频所在目录），不要写入成片所在目录。
 - 模块必须在合理时间内完成，长时间无进度输出可能导致 UI 显示异常。

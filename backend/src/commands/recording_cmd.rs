@@ -238,8 +238,8 @@ pub fn delete_recording_inner(
         if let Some(e) = last_err {
             return Err(crate::core::error::AppError::Other(e.to_string()));
         }
-        // 删除模块副产物（联系表图片等）：成片同目录与输出目录（副产物目录）都要检查
-        // Delete module side outputs (contact sheets etc.): check both the video dir and the
+        // 删除模块副产物：成片同目录与输出目录（副产物目录）都要检查
+        // Delete module side outputs: check both the video dir and the
         // output dir (the sidecar directory)
         if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
             let mut dirs: Vec<std::path::PathBuf> = Vec::new();

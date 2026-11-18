@@ -224,7 +224,13 @@ pub fn run_pipeline(
     // Sidecar dir: same directory as the metadata file (output dir), keeping the video dir clean
     let sidecar_dir = settings.sidecar_dir_for_video(video_path);
 
-    let all_nodes: Vec<&PipelineNode> = pipeline.nodes.iter().collect();
+    // contact_sheet 已移除，旧配置中的节点直接跳过。
+    // contact_sheet has been removed; ignore it if an old config still contains it.
+    let all_nodes: Vec<&PipelineNode> = pipeline
+        .nodes
+        .iter()
+        .filter(|node| node.module_id != "contact_sheet")
+        .collect();
     let total = all_nodes.iter().filter(|n| n.enabled).count();
     let mut done = 0usize;
 
@@ -368,8 +374,8 @@ fn run_node(
         .env("PP_EXE_DIR", exe_dir())
         .env("PP_MAX_TMP_MB", max_tmp_mb.to_string());
 
-    // 副产物（联系表图片等）输出目录：默认与输入同目录，分离布局下为输出目录
-    // Side-output directory (contact sheets etc.): input dir by default, output dir in split layout
+    // 副产物输出目录：默认与输入同目录，分离布局下为输出目录
+    // Side-output directory: input dir by default, output dir in split layout
     if let Some(dir) = sidecar_dir {
         cmd.env("PP_SIDECAR_DIR", dir);
     }

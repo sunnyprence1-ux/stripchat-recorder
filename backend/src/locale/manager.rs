@@ -18,13 +18,13 @@
 //!         ├── filter_short/
 //!         │   ├── zh-CN.json
 //!         │   └── en-US.json
-//!         ├── contact_sheet/
-//!         │   ├── zh-CN.json
-//!         │   └── en-US.json
 //!         ├── notify_discord/
 //!         │   ├── zh-CN.json
 //!         │   └── en-US.json
-//!         └── notify_telegram/
+//!         ├── notify_telegram/
+//!         │   ├── zh-CN.json
+//!         │   └── en-US.json
+//!         └── upload_gdrive/
 //!             ├── zh-CN.json
 //!             └── en-US.json
 //! ```
@@ -76,16 +76,6 @@ const MODULE_DEFAULTS: &[(&str, &str, &str)] = &[
         "filter_short",
         "en-US",
         include_str!("defaults/modules/filter_short/en-US.json"),
-    ),
-    (
-        "contact_sheet",
-        "zh-CN",
-        include_str!("defaults/modules/contact_sheet/zh-CN.json"),
-    ),
-    (
-        "contact_sheet",
-        "en-US",
-        include_str!("defaults/modules/contact_sheet/en-US.json"),
     ),
     (
         "notify_discord",
@@ -447,9 +437,9 @@ pub fn check_custom_locale_files() -> Vec<(String, String)> {
     // 检查模块自定义语言文件 / Check custom module locale files
     let builtin_module_ids: &[&str] = &[
         "filter_short",
-        "contact_sheet",
         "notify_discord",
         "notify_telegram",
+        "upload_gdrive",
     ];
     let builtin_locale_codes: &[&str] = &["zh-CN", "en-US"];
     if let Ok(mod_dir) = std::fs::read_dir(modules_locale_dir()) {

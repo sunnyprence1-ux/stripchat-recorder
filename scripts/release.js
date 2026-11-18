@@ -10,7 +10,6 @@
  *    build/
  *    ├── stripchat-recorder
  *    └── modules/
- *        ├── contact_sheet_*
  *        ├── filter_short_*
  *        ├── notify_discord_*
  *        └── notify_telegram_*

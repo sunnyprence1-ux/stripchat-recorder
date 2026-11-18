@@ -150,7 +150,7 @@ export default {
 		actions: {
 			play: "播放",
 			playDisabled: "录制中，无法播放",
-			preview: "查看 Contact Sheet 预览图",
+			preview: "预览",
 			postprocess: "后处理",
 			delete: "删除",
 			deleteDisabled: "文件正在录制中",
@@ -442,10 +442,10 @@ export default {
 		usernamePlaceholder: "mygroup（仅公开群组）",
 		sendVideo: "同时发送视频文件",
 		sendCover: "同时发送封面图",
-		sendCoverHint: "即联系表预览图。关闭后只发视频本身。",
+		sendCoverHint: "从视频中截取的一帧。关闭后只发视频本身。",
 		coverFirst: "先发封面图，再发视频",
 		coverFirstHint:
-			"联系表先作为一条独立的图片消息发出，视频随后作为单独的消息发送。关闭后两者合成一条相册消息。",
+			"视频截帧先作为一条独立的图片消息发出，视频随后作为单独的消息发送。关闭后两者合成一条相册消息。",
 		sendCaption: "附带文字说明",
 		sendCaptionHint:
 			"模特名、时间、时长、文件名和大小。默认关闭——视频消息里不带任何文字。",

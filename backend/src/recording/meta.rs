@@ -236,8 +236,8 @@ pub fn purge_recording(settings: &Settings, video_path: &Path) -> PurgeReport {
         .unwrap_or("")
         .to_string();
 
-    // 1) 先读元数据：里面登记的模块输出（联系表等）也要一起删
-    // Read the metadata first: module outputs recorded in it (contact sheets etc.) must go too
+    // 1) 先读元数据：里面登记的模块输出也要一起删
+    // Read the metadata first: module outputs recorded in it must go too
     let meta = read_meta(settings, video_path);
     let module_outputs: Vec<PathBuf> = meta
         .as_ref()

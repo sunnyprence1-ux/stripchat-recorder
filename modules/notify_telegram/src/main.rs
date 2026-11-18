@@ -80,7 +80,7 @@ use grammers_client::tl;
 use grammers_session::storages::SqliteSession;
 use grammers_session::types::{PeerAuth, PeerId, PeerKind, PeerRef};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncSeekExt, BufReader, SeekFrom};
-use pp_utils::{param, param_bool, format_duration, format_bytes, format_speed, parse_stem, find_cover, tmp_dir, image_dimensions, video_meta};
+use pp_utils::{param, param_bool, format_duration, format_bytes, format_speed, parse_stem, tmp_dir, image_dimensions, video_meta};
 
 /// 进度上报的缩放基数 / Progress reporting scale base
 const PROGRESS_SCALE: usize = 10_000;
@@ -151,7 +151,7 @@ const DESCRIBE: &str = r#"{
         },
         {
         "key": "send_cover",
-        "label": "同时发送封面图（联系表截图）。关闭后相册里只有视频",
+        "label": "同时发送封面图（视频截帧）。关闭后相册里只有视频",
         "type": "boolean",
         "default": true
         },
@@ -310,9 +310,9 @@ fn extract_video_thumbnail(input: &Path) -> Result<PathBuf, String> {
     Ok(thumb_path)
 }
 
-/// 从视频中截取一帧画面作为封面图（当本地没有联系表图片且开启了 send_cover 时使用）。
+/// 从视频中截取一帧画面作为封面图（始终在发送视频前使用，不再依赖 contact sheet）。
 ///
-/// Extract a video frame as cover image (used when no contact sheet exists and send_cover is on).
+/// Extract a video frame as cover image (always used before sending the video; no contact sheet).
 fn extract_video_frame(input: &Path) -> Result<PathBuf, String> {
     let stem = input.file_stem().and_then(|s| s.to_str()).unwrap_or("recording");
     let frame_path = tmp_dir().join(format!("{}.tg_cover.jpg", stem));
@@ -2595,11 +2595,11 @@ async fn upload_and_send(
         // Resolve/create the group topic for this model; on failure fall back to a normal send
         let topic_id = resolve_topic_id(client, &target, chat_id, model_name, topic_per_model, mode).await;
 
-        // 先发封面图：把联系表作为一条独立的图片消息发出去，然后才上传视频。
+        // 先发封面图：把从视频截取的帧作为一条独立的图片消息发出去，然后才上传视频。
         // 这样群里立刻能看到预览图，不必等大文件传完；视频随后作为单独的消息到达。
         //
-        // Cover first: post the contact sheet as its own photo message, then upload the video,
-        // so the preview shows up immediately instead of waiting for the big upload.
+        // Cover first: post the extracted video frame as its own photo message, then upload
+        // the video, so the preview shows up immediately instead of waiting for the big upload.
         let cover_in_album =
             !cover_sent_separately(send_video, committed_cover.is_some(), cover_first);
         if let Some(ref cover_media) = committed_cover
@@ -3524,22 +3524,21 @@ fn run() -> Result<(), String> {
     let name_str  = input.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
     let size_str  = format_bytes(file_size);
 
-    // 查找或自动从视频截取封面图 / Find or automatically extract a video frame as cover image
-    let (cover_path_buf, is_auto_cover) = match find_cover(&input) {
-        Some(p) => (Some(p), false),
-        None if send_cover => {
-            match extract_video_frame(&input) {
-                Ok(p) => {
-                    eprintln!("no contact sheet found; extracted video frame as cover: {}", p.display());
-                    (Some(p), true)
-                }
-                Err(e) => {
-                    eprintln!("could not extract cover frame from video: {}", e);
-                    (None, false)
-                }
+    // 始终从视频中截取一帧作为封面图，不再查找 contact sheet。
+    // Always extract one frame from the video as the cover image; never use a contact sheet.
+    let (cover_path_buf, is_auto_cover) = if send_cover {
+        match extract_video_frame(&input) {
+            Ok(p) => {
+                eprintln!("extracted video frame as cover: {}", p.display());
+                (Some(p), true)
+            }
+            Err(e) => {
+                eprintln!("could not extract cover frame from video: {}", e);
+                (None, false)
             }
         }
-        None => (None, false),
+    } else {
+        (None, false)
     };
     let cover = cover_path_buf.as_deref();
 

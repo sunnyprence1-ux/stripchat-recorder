@@ -30,7 +30,7 @@
       "label": "Attach a text caption (model name, timestamp, duration, file name, size). With this off the message carries no text at all — just the video"
     },
     "send_cover": {
-      "label": "Also send the cover image (contact-sheet preview). With this off the album holds the video only"
+      "label": "Also send the cover image (a frame extracted from the video). With this off the album holds the video only"
     },
     "cover_first": {
       "label": "Post the cover image on its own first, then upload and send the video. With this off the cover and the video go out together as one album message"
