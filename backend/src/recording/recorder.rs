@@ -567,6 +567,11 @@ impl RecorderManager {
 
         let mut downloaded_sequences: HashSet<u32> = HashSet::new();
         let mut downloaded_urls: HashSet<String> = HashSet::new();
+        // Stable file index for segments that have been seen but not yet
+        // written.  A failed segment keeps its original index, so when it is
+        // retried in a later round it sorts back into the correct position
+        // instead of being appended after newer segments.
+        let mut pending_indices: HashMap<String, u64> = HashMap::new();
         let mut segment_file_index: u64 = 0;
         let mut mp4_header: Option<Vec<u8>> = None;
         let mut cached_init_url: Option<String> = None;
@@ -648,6 +653,7 @@ impl RecorderManager {
                     username,
                     &mut downloaded_sequences,
                     &mut downloaded_urls,
+                    &mut pending_indices,
                     &mut mp4_header,
                     &mut cached_init_url,
                     &mut recorded_secs,
@@ -815,6 +821,7 @@ impl RecorderManager {
         username: &str,
         downloaded_sequences: &mut HashSet<u32>,
         downloaded_urls: &mut HashSet<String>,
+        pending_indices: &mut HashMap<String, u64>,
         mp4_header: &mut Option<Vec<u8>>,
         cached_init_url: &mut Option<String>,
         recorded_secs: &mut f64,
@@ -843,6 +850,7 @@ impl RecorderManager {
             );
             downloaded_sequences.clear();
             downloaded_urls.clear();
+            pending_indices.clear();
             *last_sequence = None;
             // Invalidate the cached init URL so the next block downloads a
             // fresh header.  Keep the old bytes as a fallback in case that
@@ -924,14 +932,32 @@ impl RecorderManager {
             return Ok((0, 0));
         }
 
-        let new_segments = pending_segments.len();
+        // Allocate a stable file index when a segment is first seen, not when
+        // it is successfully written.  If a download/conversion fails and the
+        // segment is retried after newer segments were written, reusing this
+        // index makes the merge (which sorts the .ts filenames) place it back
+        // in the correct position instead of appending it after newer video.
+        let pending_with_indices = assign_pending_indices(
+            pending_segments,
+            pending_indices,
+            segment_file_index,
+        );
+
+        let new_segments = pending_with_indices.len();
         let mut written = 0;
         let mut cdn_failures = 0;
+        // Keys present in this playlist.  After processing, a failed segment
+        // that has already rolled out of the live window can no longer be
+        // recovered, so drop its reserved index instead of leaking it.
+        let current_keys: HashSet<String> = pending_with_indices
+            .iter()
+            .map(|(segment, _)| clean_segment_url(&segment.url))
+            .collect();
 
         // 2. 并发下载所有新分片（带重试与小退避），缩短下载耗时以紧跟直播边缘
         // Concurrently download new segments (with retries) to stay tightly at the live edge
         let mut join_set = tokio::task::JoinSet::new();
-        for (idx, seg) in pending_segments.iter().enumerate() {
+        for (idx, (seg, _)) in pending_with_indices.iter().enumerate() {
             let api = Arc::clone(api);
             let url = seg.url.clone();
             join_set.spawn(async move {
@@ -951,7 +977,7 @@ impl RecorderManager {
             });
         }
 
-        let mut download_results: Vec<Option<Result<Vec<u8>>>> = (0..pending_segments.len()).map(|_| None).collect();
+        let mut download_results: Vec<Option<Result<Vec<u8>>>> = (0..pending_with_indices.len()).map(|_| None).collect();
         while let Some(join_res) = join_set.join_next().await {
             if let Ok((idx, download_res)) = join_res {
                 download_results[idx] = Some(download_res);
@@ -973,9 +999,9 @@ impl RecorderManager {
             }
         };
 
-        for (segment, download_opt) in pending_segments.into_iter().zip(download_results) {
+        for ((segment, file_index), download_opt) in pending_with_indices.into_iter().zip(download_results) {
             let download_res = download_opt.unwrap_or_else(|| Err(AppError::Other("Download cancelled".to_string())));
-            let clean_url = segment.url.split(['?', '#']).next().unwrap_or(&segment.url).to_string();
+            let clean_url = clean_segment_url(&segment.url);
             match download_res {
                 Ok(data) => {
                     if data.len() > 1000 {
@@ -984,12 +1010,17 @@ impl RecorderManager {
                             self.rotate_file(username, session_dir, emitter).await?;
                             *recorded_secs = 0.0;
                             *last_sequence = None;
-                            *segment_file_index = 0;
+                            // Drop reservations for the finished session, but
+                            // keep this segment's globally unique index.  The
+                            // index only needs to be monotonic inside each
+                            // session directory; continuing it avoids collisions
+                            // with the rest of this download batch.
+                            pending_indices.clear();
+                            pending_indices.insert(clean_url.clone(), file_index);
                         }
 
-                        *segment_file_index += 1;
                         let ts_path = session_dir
-                            .join(format!("{}_seg{:06}.ts", username, *segment_file_index));
+                            .join(format!("{}_seg{:06}.ts", username, file_index));
 
                         let mut conversion = convert_to_ts(build_fmp4(&data), &ts_path).await;
                         if conversion.is_err() {
@@ -1031,8 +1062,15 @@ impl RecorderManager {
                                     None => false,
                                 };
                                 append_to_m3u8(session_dir, &ts_path, segment.duration_secs, discontinuity);
-                                *last_sequence = Some(segment.sequence);
+                                // Keep the newest sequence seen.  A late retry of
+                                // an older segment must not make reset detection
+                                // think the stream rewound.
+                                *last_sequence = Some(match *last_sequence {
+                                    Some(prev) => prev.max(segment.sequence),
+                                    None => segment.sequence,
+                                });
                                 downloaded_sequences.insert(segment.sequence);
+                                pending_indices.remove(&clean_url);
                                 downloaded_urls.insert(clean_url);
                                 downloaded_urls.insert(segment.url);
                                 written += 1;
@@ -1042,7 +1080,7 @@ impl RecorderManager {
                                 tracing::error!(
                                     "ffmpeg convert failed → segment {} (file index {}): {}",
                                     segment.sequence,
-                                    *segment_file_index,
+                                    file_index,
                                     e
                                 );
                                 cdn_failures += 1;
@@ -1071,6 +1109,10 @@ impl RecorderManager {
             )));
         }
 
+        // Keep only reservations for failed segments that are still inside the
+        // current live window.
+        pending_indices.retain(|key, _| current_keys.contains(key));
+
         Ok((written, cdn_failures))
     }
 }
@@ -1098,6 +1140,47 @@ fn playlist_rewound(previous_last: Option<u32>, playlist_max: Option<u32>) -> bo
     }
 }
 
+/// Strip the scheme/host and the rotating auth query from a segment URL.
+/// The remaining path is the stable identity of a segment (both for dedupe and
+/// for the retry index).  Ignoring the host also avoids re-downloading the same
+/// segment when Stripchat's multi-CDN race switches between doppiocdn TLDs.
+fn clean_segment_url(url: &str) -> String {
+    let no_query = url.split(['?', '#']).next().unwrap_or(url);
+    if let Some((_, rest)) = no_query.split_once("://")
+        && let Some((_, path)) = rest.split_once('/')
+    {
+        return format!("/{}", path);
+    }
+    no_query.to_string()
+}
+
+/// Assign (or reuse) a stable file index for every pending segment.
+///
+/// Indices are reserved when a segment is first seen.  A failed segment keeps
+/// its reservation, so a later retry writes to its original filename and the
+/// merge's filename sort restores the correct order.
+fn assign_pending_indices(
+    pending: Vec<crate::recording::hls::HlsSegment>,
+    pending_indices: &mut HashMap<String, u64>,
+    segment_file_index: &mut u64,
+) -> Vec<(crate::recording::hls::HlsSegment, u64)> {
+    pending
+        .into_iter()
+        .map(|segment| {
+            let key = clean_segment_url(&segment.url);
+            let index = match pending_indices.get(&key).copied() {
+                Some(index) => index,
+                None => {
+                    *segment_file_index += 1;
+                    pending_indices.insert(key, *segment_file_index);
+                    *segment_file_index
+                }
+            };
+            (segment, index)
+        })
+        .collect()
+}
+
 /// Return segments that have not been downloaded yet.
 ///
 /// The URL path (without the rotating auth query) is the identity.  Sequence
@@ -1111,13 +1194,16 @@ fn collect_pending_segments(
     let mut pending = Vec::new();
     let mut seen_in_playlist: HashSet<String> = HashSet::new();
     for segment in segments {
-        let clean_url = segment
+        let clean_url = clean_segment_url(&segment.url);
+        let no_query = segment
             .url
             .split(['?', '#'])
             .next()
-            .unwrap_or(&segment.url)
-            .to_string();
-        if downloaded_urls.contains(&clean_url) || downloaded_urls.contains(&segment.url) {
+            .unwrap_or(&segment.url);
+        if downloaded_urls.contains(&clean_url)
+            || downloaded_urls.contains(no_query)
+            || downloaded_urls.contains(&segment.url)
+        {
             continue;
         }
         if !seen_in_playlist.insert(clean_url) {
@@ -2437,6 +2523,46 @@ mod tests {
     }
 
     #[test]
+    fn test_pending_indices_stay_stable_across_retries() {
+        use crate::recording::hls::HlsSegment;
+
+        let mut pending_indices: HashMap<String, u64> = HashMap::new();
+        let mut next_index = 0;
+
+        let seg = |name: &str, sequence: u32| HlsSegment {
+            url: format!("https://cdn.example.com/hls/{}?token=1", name),
+            sequence,
+            duration_secs: 2.0,
+        };
+
+        // Round 1: two new segments receive 1 and 2.
+        let first = assign_pending_indices(
+            vec![seg("model_100.mp4", 100), seg("model_101.mp4", 101)],
+            &mut pending_indices,
+            &mut next_index,
+        );
+        assert_eq!(first.iter().map(|(_, index)| *index).collect::<Vec<_>>(), vec![1, 2]);
+
+        // 101 succeeded (reservation removed), 100 failed and is retried with a
+        // rotated query token while 102 arrives.  The retry must keep index 1
+        // so it sorts before 102, which receives the next index (3).
+        pending_indices.remove(&clean_segment_url("https://cdn.example.com/hls/model_101.mp4"));
+        let retry = HlsSegment {
+            url: "https://cdn.example.com/hls/model_100.mp4?token=2".to_string(),
+            sequence: 100,
+            duration_secs: 2.0,
+        };
+        let second = assign_pending_indices(
+            vec![retry, seg("model_102.mp4", 102)],
+            &mut pending_indices,
+            &mut next_index,
+        );
+        assert_eq!(second[0].1, 1, "a retry must keep its original file index");
+        assert_eq!(second[1].1, 3, "a new segment must get the next index");
+        assert_eq!(next_index, 3);
+    }
+
+    #[test]
     fn test_playlist_rewound_detects_restart() {
         assert!(!playlist_rewound(None, Some(1)));
         assert!(!playlist_rewound(Some(103), Some(104)));
@@ -2480,6 +2606,12 @@ mod tests {
     #[test]
     fn test_pending_segments_dedupe_by_path_not_query_token() {
         use crate::recording::hls::HlsSegment;
+
+        assert_eq!(
+            clean_segment_url("https://a.example.com/hls/model_100.mp4?token=1"),
+            clean_segment_url("https://b.example.com/hls/model_100.mp4?token=2"),
+            "the CDN host and auth query must not change a segment's identity"
+        );
 
         let downloaded_urls: HashSet<String> =
             ["https://cdn.example.com/hls/model_100.mp4".to_string()]
