@@ -1,0 +1,11 @@
+{
+  "name": "Google Drive Upload 0.1.0",
+  "description": "Upload finished videos to Google Drive, one folder per model",
+  "params": {
+    "client_id": { "label": "Google OAuth Client ID" },
+    "client_secret": { "label": "Google OAuth Client Secret" },
+    "root_folder": { "label": "Root folder name in Google Drive" },
+    "upload_cover": { "label": "Also upload the cover image if one exists" },
+    "delete_after_send": { "label": "Delete the local video after a successful upload" }
+  }
+}

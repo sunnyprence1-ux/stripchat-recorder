@@ -238,6 +238,8 @@ export default {
 			codeSent:
 				"A login code was sent to your Telegram app. Enter it below.",
 			verify: "Verify",
+			deviceHint: "Open this URL in your browser and enter the code below.",
+			deviceCheck: "Check authorization",
 			passwordLabel: "Two-factor password",
 			passwordHint: "Two-step verification is enabled. Hint: {hint}",
 			passwordHintNone: "Two-step verification is enabled.",

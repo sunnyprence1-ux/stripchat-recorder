@@ -107,6 +107,16 @@ const MODULE_DEFAULTS: &[(&str, &str, &str)] = &[
         "en-US",
         include_str!("defaults/modules/notify_telegram/en-US.json"),
     ),
+    (
+        "upload_gdrive",
+        "zh-CN",
+        include_str!("defaults/modules/upload_gdrive/zh-CN.json"),
+    ),
+    (
+        "upload_gdrive",
+        "en-US",
+        include_str!("defaults/modules/upload_gdrive/en-US.json"),
+    ),
 ];
 
 /// 初始化 locale 目录：若文件不存在则创建，若内置文件校验失败则重建。

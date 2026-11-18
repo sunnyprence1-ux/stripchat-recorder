@@ -348,6 +348,8 @@
 				return "connecting";
 			case "ready":
 				return "phone";
+			case "device":
+				return "device";
 			case "code_sent":
 			case "invalid_code":
 				return "code";
@@ -368,6 +370,31 @@
 		const [name, tier] = loginDetail.value.split(":");
 		return tier ? `${name} (${tier})` : name || loginDetail.value;
 	});
+
+	/** 设备码登录的信息（URL / code） */
+	const deviceInfo = computed(() => {
+		const [url = "", code = ""] = loginDetail.value.split("|");
+		return { url, code };
+	});
+
+	/** 设备码登录后检查一次授权状态 */
+	async function checkDevice() {
+		if (loginRunning.value || !loginId.value) return;
+		loginRunning.value = true;
+		try {
+			applyLoginUpdate(
+				await call<LoginUpdate>("login_input", {
+					loginId: loginId.value,
+					value: "check:",
+				}),
+			);
+		} catch (e) {
+			loginState.value = "error";
+			loginDetail.value = e instanceof Error ? e.message : String(e);
+		} finally {
+			loginRunning.value = false;
+		}
+	}
 
 	/** 把一次交互结果写入界面状态 / Apply one interaction result to the UI state */
 	function applyLoginUpdate(update: LoginUpdate) {
@@ -789,6 +816,34 @@
 						<Loader2 class="size-4 animate-spin" />
 						{{ t("postprocess.login.connecting") }}
 					</div>
+
+					<!-- 设备码 / Device code -->
+					<template v-else-if="loginStep === 'device'">
+						<div class="flex flex-col gap-2">
+							<p class="text-sm text-muted-foreground">
+								{{ t("postprocess.login.deviceHint") }}
+							</p>
+							<p class="text-sm font-mono break-all">
+								{{ deviceInfo.url }}
+							</p>
+							<p class="text-sm font-mono break-all font-medium">
+								{{ deviceInfo.code }}
+							</p>
+						</div>
+						<div class="flex justify-end">
+							<Button
+								size="sm"
+								:disabled="loginRunning"
+								@click="checkDevice"
+							>
+								<Loader2
+									v-if="loginRunning"
+									class="size-3.5 animate-spin"
+								/>
+								{{ t("postprocess.login.deviceCheck") }}
+							</Button>
+						</div>
+					</template>
 
 					<!-- 手机号 / Phone number -->
 					<template v-else-if="loginStep === 'phone'">

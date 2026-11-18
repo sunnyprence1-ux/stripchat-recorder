@@ -234,6 +234,8 @@ export default {
 			codeLabel: "验证码",
 			codeSent: "验证码已发送到你的 Telegram 客户端，请在下方输入。",
 			verify: "验证",
+			deviceHint: "请在浏览器中打开以下网址，并输入下方代码。",
+			deviceCheck: "检查授权状态",
 			passwordLabel: "两步验证密码",
 			passwordHint: "该账号已开启两步验证。密码提示：{hint}",
 			passwordHintNone: "该账号已开启两步验证。",
