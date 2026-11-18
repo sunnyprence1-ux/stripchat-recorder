@@ -27,6 +27,10 @@ os.environ.setdefault("WZGRAM_MAX_INFLIGHT_MEDIA", "6")
 os.environ.setdefault("WZGRAM_MAX_INFLIGHT_PACKETS", "16")
 os.environ.setdefault("WZGRAM_MAX_PENDING_UPDATES", "64")
 os.environ.setdefault("WZGRAM_MAX_LISTENERS", "64")
+# Give part workers a longer window to drain their shutdown sentinel. WZGram's
+# 60 s default can cancel live workers under flood/network churn, and save_file()
+# would still report success, leaving missing 512 KiB parts on the server.
+os.environ.setdefault("WZGRAM_MEDIA_TIMEOUT", "180")
 
 _ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
 _ENCODE = {c: i for i, c in enumerate(_ALPHABET)}
@@ -156,6 +160,59 @@ def _read_grammers_session(path: str) -> tuple:
         conn.close()
 
 
+async def _safe_stop_workers(queue, workers, media_wait_timeout: int):
+    """Replacement for WZGram 3.1.7's save_file()._stop_workers().
+
+    The original helper cancels the remaining workers when the shutdown
+    sentinel cannot be delivered within ``MEDIA_WAIT_TIMEOUT`` and then returns
+    normally. save_file() treats that as success, so Telegram can be left with
+    missing 512 KiB parts and the user sees a 0 KB / corrupted file in the
+    group. This version turns the same situation into an exception, so the Rust
+    module falls back to its own uploader instead of committing an incomplete
+    upload.
+    """
+    unfinished_at_entry = sum(not task.done() for task in workers)
+    delivered = 0
+
+    for _ in workers:
+        if all(task.done() for task in workers):
+            break
+        try:
+            await asyncio.wait_for(queue.put(None), media_wait_timeout)
+        except asyncio.TimeoutError:
+            break
+        delivered += 1
+
+    if delivered < unfinished_at_entry:
+        for task in workers:
+            if not task.done():
+                task.cancel()
+
+    results = await asyncio.gather(*workers, return_exceptions=True)
+    if delivered < unfinished_at_entry:
+        raise TimeoutError(
+            "WZGram upload stopped before all part workers were drained: "
+            f"{unfinished_at_entry - delivered} worker(s) were cancelled"
+        )
+    for item in results:
+        if isinstance(item, BaseException) and not isinstance(
+            item, asyncio.CancelledError
+        ):
+            raise item
+    return results
+
+
+def _install_safe_stop_workers(save_file_mod, media_wait_timeout: int) -> None:
+    """Point WZGram's save_file() at the safe worker-drain helper."""
+    if not hasattr(save_file_mod, "_stop_workers"):
+        return
+
+    async def stop_workers(queue, workers):
+        return await _safe_stop_workers(queue, workers, media_wait_timeout)
+
+    save_file_mod._stop_workers = stop_workers
+
+
 async def _run() -> None:
     upload_path = os.environ["TG_UPLOAD_PATH"]
     api_id = int(os.environ["TG_API_ID"])
@@ -184,6 +241,10 @@ async def _run() -> None:
         pass
 
     from wzgram import Client, raw
+    from wzgram.methods.advanced import save_file as _save_file_mod
+    from wzgram.session import Session
+
+    _install_safe_stop_workers(_save_file_mod, Session.MEDIA_WAIT_TIMEOUT)
 
     dc_id, auth_key, host, port = _read_grammers_session(session_path)
     session_string = _session_string(dc_id, api_id, auth_key, host, port)

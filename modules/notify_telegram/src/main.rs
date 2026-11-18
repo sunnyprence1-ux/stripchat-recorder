@@ -2181,6 +2181,18 @@ async fn upload_via_wzgram(
         progress.add(size - reported_bytes);
     }
 
+    // Telegram only knows the file through the parts we uploaded. If WZGram
+    // reports a different part count than the file actually needs, the commit
+    // would create a 0-byte/corrupt document. Fail loudly so the Rust uploader
+    // retries from scratch.
+    let expected_parts = size.div_ceil(UPLOAD_CHUNK_SIZE) as i32;
+    if total_parts != expected_parts {
+        return Err(format!(
+            "WZGram part count mismatch: got {}, expected {} ({} bytes)",
+            total_parts, expected_parts, size
+        ));
+    }
+
     let name = path.file_name().unwrap().to_string_lossy().to_string();
     Ok(Uploaded::from_raw(if is_big {
         tl::types::InputFileBig {

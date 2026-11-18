@@ -4,6 +4,7 @@ These tests do not require the WZGram virtualenv; they only exercise the
 session-address conversion and WZ v3 session-string encoding in the sidecar.
 """
 
+import asyncio
 import importlib.util
 import sqlite3
 import struct
@@ -98,6 +99,39 @@ class GrammersSessionTests(unittest.TestCase):
                 wz._read_grammers_session(str(path)),
                 (2, auth_key, "149.154.167.41", 443),
             )
+
+
+class SafeStopWorkersTests(unittest.TestCase):
+    def test_raises_when_worker_is_not_drained(self):
+        async def run():
+            queue = asyncio.Queue(maxsize=1)
+            started = asyncio.Event()
+
+            async def worker():
+                started.set()
+                await asyncio.sleep(10)
+
+            task = asyncio.create_task(worker())
+            await started.wait()
+            with self.assertRaises(TimeoutError):
+                await wz._safe_stop_workers(queue, [task], 0)
+
+        asyncio.run(run())
+
+    def test_returns_normally_when_all_workers_are_drained(self):
+        async def run():
+            queue = asyncio.Queue(maxsize=1)
+
+            async def worker():
+                assert await queue.get() is None
+
+            task = asyncio.create_task(worker())
+            self.assertEqual(
+                await wz._safe_stop_workers(queue, [task], 1),
+                [None],
+            )
+
+        asyncio.run(run())
 
 
 if __name__ == "__main__":
