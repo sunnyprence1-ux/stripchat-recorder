@@ -773,9 +773,35 @@ where
     /// Download the byte data of a single HLS segment.
     pub async fn download_segment(&self, url: &str) -> Result<Vec<u8>> {
         let resp = self.cdn_get(url).await?;
+
+        // A CDN edge that drops the connection mid-body can still return a
+        // 200 with a truncated payload.  The old code accepted anything larger
+        // than 1000 bytes, which produced a corrupt segment and a visible cut
+        // in the final video.  Verify the advertised body length when the
+        // response is not compressed (HLS media segments are not compressed).
+        let content_encoded = resp
+            .headers()
+            .contains_key(reqwest::header::CONTENT_ENCODING);
+        let expected_len = if content_encoded {
+            None
+        } else {
+            resp.content_length()
+        };
+
         let bytes = resp.bytes().await?.to_vec();
         if bytes.is_empty() {
             return Err(AppError::Other(format!("Downloaded 0 bytes from {}", url)));
+        }
+        if let Some(expected) = expected_len
+            && expected > 0
+            && bytes.len() as u64 != expected
+        {
+            return Err(AppError::Other(format!(
+                "Truncated download from {}: got {} of {} bytes",
+                url,
+                bytes.len(),
+                expected
+            )));
         }
         Ok(bytes)
     }

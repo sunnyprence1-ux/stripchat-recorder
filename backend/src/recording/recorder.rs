@@ -826,56 +826,99 @@ impl RecorderManager {
         let (segments, init_url) = parse_playlist(&playlist, url_prefix, mouflon_keys)?;
         let init_url_path = |u: &str| u.split('?').next().unwrap_or(u).to_string();
         let new_init_path = init_url.as_deref().map(init_url_path);
+
+        // Detect a genuine stream restart at playlist level *before* dedupe.
+        // A reconnect can reuse sequence numbers that are already in
+        // `downloaded_sequences`; checking duplicates first used to skip the
+        // whole new stream until its sequence exceeded the old maximum, which
+        // looked like a large cut in the middle of the recording.
+        let playlist_max = segments.iter().map(|s| s.sequence).max();
+        let mut init_changed = false;
+        if playlist_rewound(*last_sequence, playlist_max) {
+            tracing::warn!(
+                "Stream sequence reset detected for {} (previous max: {:?}, playlist max: {:?}), resetting state",
+                username,
+                *last_sequence,
+                playlist_max
+            );
+            downloaded_sequences.clear();
+            downloaded_urls.clear();
+            *last_sequence = None;
+            // Invalidate the cached init URL so the next block downloads a
+            // fresh header.  Keep the old bytes as a fallback in case that
+            // download is temporarily unavailable.
+            *cached_init_url = None;
+            init_changed = true;
+        }
+
         let cached_init_path = cached_init_url.as_deref().map(init_url_path);
         if new_init_path.is_some()
-            && new_init_path != cached_init_path
+            && (init_changed || new_init_path != cached_init_path)
             && let Some(ref url) = init_url
         {
-            match api.download_segment(url).await {
-                Ok(data) => {
+            let mut fresh_header = None;
+            for attempt in 0..3u64 {
+                match api.download_segment(url).await {
+                    Ok(data) if !data.is_empty() => {
+                        fresh_header = Some(data);
+                        break;
+                    }
+                    Ok(_) => {
+                        tracing::warn!(
+                            "Init segment for {} was empty (attempt {}/3)",
+                            username,
+                            attempt + 1
+                        );
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "Failed to download init segment for {} (attempt {}/3): {}",
+                            username,
+                            attempt + 1,
+                            e
+                        );
+                    }
+                }
+                tokio::time::sleep(tokio::time::Duration::from_millis(
+                    150 * (attempt + 1),
+                ))
+                .await;
+            }
+
+            match fresh_header {
+                Some(data) => {
                     tracing::info!("Cached init segment → {} ({} bytes)", username, data.len());
                     *mp4_header = Some(data);
                     *cached_init_url = Some(url.clone());
                 }
-                Err(e) => {
-                    tracing::error!(
-                        "Failed to download init segment: {}, skipping this round",
-                        e
-                    );
-                    return Ok((0, 0));
-                }
-            }
-        }
-
-        // 1. 过滤出尚未下载的新分片，严格跳过已在历史集合中的分片（避免滑动窗口重叠造成误判定）
-        // Filter out already downloaded segments; existing window overlap must never be treated as reset
-        let mut pending_segments: Vec<crate::recording::hls::HlsSegment> = Vec::new();
-        for segment in segments {
-            let clean_url = segment.url.split(['?', '#']).next().unwrap_or(&segment.url);
-            let is_duplicate = downloaded_sequences.contains(&segment.sequence)
-                || downloaded_urls.contains(clean_url)
-                || downloaded_urls.contains(&segment.url);
-
-            if is_duplicate {
-                continue;
-            }
-
-            // 检测流真实重连 / 序号大幅回退：仅对新分片且上一序号较大（>50）且序号重置回 10 以内或落差 > 50 时触发
-            // Detect genuine stream reconnect / restart: only for unseen segments where sequence resets to near 0
-            if let Some(prev) = *last_sequence {
-                if prev > 50 && (segment.sequence <= 10 || prev.saturating_sub(segment.sequence) > 50) {
+                None if mp4_header.is_some() => {
+                    // Keep using the previous header for this round.  The
+                    // cached init URL was invalidated above, so the next round
+                    // will retry the fresh header.
                     tracing::warn!(
-                        "Stream sequence reset detected for {} (prev: {}, new: {}), resetting deduplication caches",
-                        username, prev, segment.sequence
+                        "Init segment refresh failed for {}; using the previously cached header",
+                        username
                     );
-                    downloaded_sequences.clear();
-                    downloaded_urls.clear();
-                    *last_sequence = None;
+                }
+                None => {
+                    tracing::error!(
+                        "Init segment download failed for {} and no cached header exists",
+                        username
+                    );
+                    return Err(AppError::Other(
+                        "init segment download failed; refreshing playlist".to_string(),
+                    ));
                 }
             }
-
-            pending_segments.push(segment);
         }
+
+        // 1. 过滤出尚未下载的新分片。
+        // Deduplicate by URL (path only).  A URL's auth query token rotates
+        // frequently, so comparing the full URL would re-download the same
+        // segment, while comparing sequence numbers can skip a new stream that
+        // reuses numbers after a reconnect.  The path contains Stripchat's real
+        // source sequence, so it is the stable identity of a segment.
+        let pending_segments = collect_pending_segments(segments, downloaded_urls);
 
         if pending_segments.is_empty() {
             return Ok((0, 0));
@@ -917,6 +960,19 @@ impl RecorderManager {
 
         // 3. 按原始播放列表顺序处理转换和写入，保证文件命名和时间戳单调递增
         // Process conversion and append in original playlist order to maintain monotonic indexing
+        let init_header = (*mp4_header).clone();
+        let build_fmp4 = |payload: &[u8]| -> Vec<u8> {
+            match init_header.as_deref() {
+                Some(h) => {
+                    let mut v = Vec::with_capacity(h.len() + payload.len());
+                    v.extend_from_slice(h);
+                    v.extend_from_slice(payload);
+                    v
+                }
+                None => payload.to_vec(),
+            }
+        };
+
         for (segment, download_opt) in pending_segments.into_iter().zip(download_results) {
             let download_res = download_opt.unwrap_or_else(|| Err(AppError::Other("Download cancelled".to_string())));
             let clean_url = segment.url.split(['?', '#']).next().unwrap_or(&segment.url).to_string();
@@ -935,17 +991,40 @@ impl RecorderManager {
                         let ts_path = session_dir
                             .join(format!("{}_seg{:06}.ts", username, *segment_file_index));
 
-                        let fmp4: Vec<u8> = match mp4_header.as_deref() {
-                            Some(h) => {
-                                let mut v = Vec::with_capacity(h.len() + data.len());
-                                v.extend_from_slice(h);
-                                v.extend_from_slice(&data);
-                                v
+                        let mut conversion = convert_to_ts(build_fmp4(&data), &ts_path).await;
+                        if conversion.is_err() {
+                            // Truncated bodies (or a transient pipe/read error)
+                            // can make a valid-looking segment fail conversion.
+                            // Re-download once before declaring it lost; the URL
+                            // is still inside its auth-token window.
+                            tracing::warn!(
+                                "Segment {} conversion failed, re-downloading once",
+                                segment.sequence
+                            );
+                            tokio::time::sleep(tokio::time::Duration::from_millis(250)).await;
+                            match api.download_segment(&segment.url).await {
+                                Ok(retry_data) if retry_data.len() > 1000 => {
+                                    conversion =
+                                        convert_to_ts(build_fmp4(&retry_data), &ts_path).await;
+                                }
+                                Ok(retry_data) => {
+                                    tracing::warn!(
+                                        "Retried segment {} was too small ({} bytes)",
+                                        segment.sequence,
+                                        retry_data.len()
+                                    );
+                                }
+                                Err(e) => {
+                                    tracing::warn!(
+                                        "Retried download failed for segment {}: {}",
+                                        segment.sequence,
+                                        e
+                                    );
+                                }
                             }
-                            None => data,
-                        };
+                        }
 
-                        match convert_to_ts(fmp4, &ts_path).await {
+                        match conversion {
                             Ok(_) => {
                                 let discontinuity = match *last_sequence {
                                     Some(prev) => segment.sequence > prev.saturating_add(1) || segment.sequence < prev,
@@ -966,6 +1045,7 @@ impl RecorderManager {
                                     *segment_file_index,
                                     e
                                 );
+                                cdn_failures += 1;
                             }
                         }
                     } else {
@@ -999,6 +1079,55 @@ fn recording_limit_reached(recorded_secs: f64, limit: u64) -> bool {
     limit > 0 && recorded_secs >= limit as f64
 }
 
+/// Returns true when a playlist has rewound far enough to be a new stream rather
+/// than the normal sliding-window overlap.
+///
+/// `previous_last` is the newest sequence we successfully wrote.  In normal
+/// operation the playlist's max sequence is always >= it.  A reconnect can
+/// restart near zero or jump far backwards; both cases must clear dedupe state
+/// *before* duplicate filtering, otherwise the new stream is silently skipped
+/// until its sequence passes the old maximum.
+fn playlist_rewound(previous_last: Option<u32>, playlist_max: Option<u32>) -> bool {
+    const SMALL_SEQUENCE: u32 = 10;
+    const BACKWARD_JUMP: u32 = 20;
+    match (previous_last, playlist_max) {
+        (Some(prev), Some(max)) => {
+            max < prev && (max <= SMALL_SEQUENCE || prev.saturating_sub(max) > BACKWARD_JUMP)
+        }
+        _ => false,
+    }
+}
+
+/// Return segments that have not been downloaded yet.
+///
+/// The URL path (without the rotating auth query) is the identity.  Sequence
+/// numbers are deliberately *not* used here: Stripchat can reuse them after a
+/// reconnect, and treating a reused number as a duplicate silently cuts out
+/// the beginning of the new stream.
+fn collect_pending_segments(
+    segments: Vec<crate::recording::hls::HlsSegment>,
+    downloaded_urls: &HashSet<String>,
+) -> Vec<crate::recording::hls::HlsSegment> {
+    let mut pending = Vec::new();
+    let mut seen_in_playlist: HashSet<String> = HashSet::new();
+    for segment in segments {
+        let clean_url = segment
+            .url
+            .split(['?', '#'])
+            .next()
+            .unwrap_or(&segment.url)
+            .to_string();
+        if downloaded_urls.contains(&clean_url) || downloaded_urls.contains(&segment.url) {
+            continue;
+        }
+        if !seen_in_playlist.insert(clean_url) {
+            continue;
+        }
+        pending.push(segment);
+    }
+    pending
+}
+
 /// 检查 ffmpeg 是否在 PATH 中可用。
 /// Check if ffmpeg is available on PATH.
 pub fn ffmpeg_available() -> bool {
@@ -1029,7 +1158,7 @@ async fn convert_to_ts(fmp4_data: Vec<u8>, ts_path: &PathBuf) -> Result<()> {
         {
             tokio::process::Command::new("ffmpeg")
                 .creation_flags(0x08000000)
-                .args(["-y", "-loglevel", "warning", "-i", "pipe:0", "-c", "copy", "-muxdelay", "0", "-f", "mpegts"])
+                .args(["-y", "-loglevel", "warning", "-i", "pipe:0", "-c", "copy", "-muxdelay", "0", "-avoid_negative_ts", "make_zero", "-fps_mode", "passthrough", "-max_interleave_delta", "0", "-f", "mpegts"])
                 .arg(&tmp_path)
                 .stdin(Stdio::piped())
                 .stdout(Stdio::null())
@@ -1040,7 +1169,7 @@ async fn convert_to_ts(fmp4_data: Vec<u8>, ts_path: &PathBuf) -> Result<()> {
         #[cfg(not(windows))]
         {
             tokio::process::Command::new("ffmpeg")
-                .args(["-y", "-loglevel", "warning", "-i", "pipe:0", "-c", "copy", "-muxdelay", "0", "-f", "mpegts"])
+                .args(["-y", "-loglevel", "warning", "-i", "pipe:0", "-c", "copy", "-muxdelay", "0", "-avoid_negative_ts", "make_zero", "-fps_mode", "passthrough", "-max_interleave_delta", "0", "-f", "mpegts"])
                 .arg(&tmp_path)
                 .stdin(Stdio::piped())
                 .stdout(Stdio::null())
@@ -1173,19 +1302,22 @@ fn merge_segments(
 ) -> Option<u64> {
     let m3u8_path = session_dir.join("playlist.m3u8");
     if !m3u8_path.exists() {
+        // Playlist writes can fail even though every .ts segment is on disk.
+        // The concat list is built from the files below, so merging must not be
+        // abandoned just because the sidecar playlist is missing.
         tracing::warn!(
-            "playlist.m3u8 not found in {:?}, skipping merge",
+            "playlist.m3u8 not found in {:?}; merging segments directly",
             session_dir
         );
-        return None;
     }
 
     // 在合并前写入 #EXT-X-ENDLIST 标记，使 M3U8 成为完整的 VOD 播放列表
     // Write #EXT-X-ENDLIST before merging to finalize the M3U8 as a complete VOD playlist
-    if let Err(e) = fs::OpenOptions::new()
-        .append(true)
-        .open(&m3u8_path)
-        .and_then(|mut f| f.write_all(b"#EXT-X-ENDLIST\n"))
+    if m3u8_path.exists()
+        && let Err(e) = fs::OpenOptions::new()
+            .append(true)
+            .open(&m3u8_path)
+            .and_then(|mut f| f.write_all(b"#EXT-X-ENDLIST\n"))
     {
         tracing::warn!("Failed to write #EXT-X-ENDLIST: {}", e);
     }
@@ -1292,8 +1424,19 @@ fn merge_segments(
         }
     }
 
+    if !use_concat && !m3u8_path.exists() {
+        tracing::error!(
+            "No .ts segments and no playlist.m3u8 in {:?}; nothing to merge",
+            session_dir
+        );
+        return None;
+    }
+
     let mut cmd = Command::new("ffmpeg");
     cmd.arg("-y");
+    // `+genpts` must be an input flag: the concat/HLS demuxer can otherwise
+    // hand the muxer packets with missing/duplicate timestamps at boundaries.
+    cmd.args(["-fflags", "+genpts"]);
     if use_concat {
         cmd.current_dir(session_dir)
             .args(["-f", "concat", "-safe", "0", "-i"])
@@ -1303,15 +1446,21 @@ fn merge_segments(
             .arg(&m3u8_path);
     }
 
-    // 时间戳平滑与容错参数：重新生成 PTS、防止负时间戳导致的帧丢失（避免 +discardcorrupt 误丢正常帧）
-    // Timestamp smoothing & robustness: regenerate PTS, avoid negative TS (without discardcorrupt)
+    // 时间戳平滑与容错参数：防止负时间戳导致的帧丢失（避免 +discardcorrupt 误丢正常帧）
+    // Timestamp smoothing & robustness: avoid negative TS (without discardcorrupt).
+    // `-fps_mode passthrough` is important here: the default timestamp-based
+    // frame dropping can silently remove frames at segment boundaries.
+    // `-max_interleave_delta 0` stops the muxer from discarding packets after a
+    // timestamp gap (which happens after a dropped segment / stream reconnect).
     cmd.args([
         "-c",
         "copy",
-        "-fflags",
-        "+genpts",
         "-avoid_negative_ts",
         "make_zero",
+        "-fps_mode",
+        "passthrough",
+        "-max_interleave_delta",
+        "0",
     ]);
 
     // MP4/MOV 格式启用 faststart 标记（将 moov atom 移至文件头部，方便边下边播与即时定位）
@@ -1391,11 +1540,14 @@ fn merge_segments(
             if let Err(e) = fs::remove_dir_all(session_dir) {
                 tracing::error!("Failed to remove segment dir: {}", e);
             }
-            // Re-mux MP4 output so the container duration is rebuilt from the
-            // packet timeline. Without this, some concat outputs are playable
-            // but report 0 seconds, which Telegram shows as 00:00.
+            // Only rebuild the container when its duration header is actually
+            // missing/zero.  Re-muxing every file was an extra full pass that
+            // could drop frames on a non-monotonic timestamp boundary.
             if is_mp4 {
-                normalize_mp4_duration(&output_path);
+                let container_duration = ffprobe_container_duration(&output_path);
+                if container_duration.map_or(true, |d| d < 1.0) {
+                    normalize_mp4_duration(&output_path);
+                }
             }
             let duration = get_video_duration(&output_path);
 
@@ -1442,9 +1594,22 @@ fn normalize_mp4_duration(path: &std::path::Path) {
     let _ = fs::remove_file(&tmp_path);
     let status = Command::new("ffmpeg")
         .arg("-y")
-        .args(["-v", "error", "-i"])
+        .args(["-v", "error", "-fflags", "+genpts", "-i"])
         .arg(path)
-        .args(["-c", "copy", "-movflags", "+faststart"])
+        .args([
+            "-map",
+            "0",
+            "-c",
+            "copy",
+            "-avoid_negative_ts",
+            "make_zero",
+            "-fps_mode",
+            "passthrough",
+            "-max_interleave_delta",
+            "0",
+            "-movflags",
+            "+faststart",
+        ])
         .arg(&tmp_path)
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -1483,6 +1648,21 @@ fn ffprobe_output(path: &std::path::Path, args: &[&str]) -> Option<String> {
         .output()
         .ok()?;
     Some(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+/// Read only the container/format duration (no packet fallback).
+fn ffprobe_container_duration(path: &std::path::Path) -> Option<f64> {
+    ffprobe_output(
+        path,
+        &[
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+        ],
+    )
+    .as_deref()
+    .and_then(ffprobe_positive_duration)
 }
 
 fn ffprobe_positive_duration(output: &str) -> Option<f64> {
@@ -2068,91 +2248,265 @@ mod tests {
     }
 
     #[test]
-    fn test_sliding_window_deduplication_no_false_resets() {
+    fn test_merge_segments_without_m3u8() {
+        let temp_dir = std::env::temp_dir().join(format!("rec_test_nom3u8_{}", std::process::id()));
+        let session_dir = temp_dir.join("session_no_m3u8");
+        let _ = fs::remove_dir_all(&temp_dir);
+        fs::create_dir_all(&session_dir).unwrap();
+
+        let seg1 = session_dir.join("test_seg000001.ts");
+        let seg2 = session_dir.join("test_seg000002.ts");
+        generate_test_ts(&seg1, 2);
+        generate_test_ts(&seg2, 2);
+
+        // No playlist.m3u8 at all: the concat list built from the .ts files
+        // must still be merged instead of aborting and losing the recording.
+        let output_video = temp_dir.join("final_no_m3u8.mp4");
+        let emitter: Arc<dyn Emitter> = Arc::new(NoopEmitter);
+        let settings = Settings::default();
+        let session_dir_str = session_dir.to_string_lossy().to_string();
+
+        let duration = merge_segments(
+            &session_dir,
+            &output_video,
+            "test_user",
+            &emitter,
+            &session_dir_str,
+            &settings,
+        );
+
+        assert_eq!(duration, Some(4));
+        assert!(output_video.exists());
+        assert_eq!(get_video_duration(&output_video), Some(4));
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_fmp4_segments_survive_conversion_and_merge() {
+        let temp_dir =
+            std::env::temp_dir().join(format!("rec_test_fmp4_{}", std::process::id()));
+        let session_dir = temp_dir.join("session_fmp4");
+        let _ = fs::remove_dir_all(&temp_dir);
+        fs::create_dir_all(&session_dir).unwrap();
+
+        // Source: 6 seconds at 30 fps = 180 frames, one keyframe per second.
+        let source = temp_dir.join("source.mp4");
+        let status = Command::new("ffmpeg")
+            .args([
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc=duration=6:size=320x240:rate=30",
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+                "-g",
+                "30",
+                "-keyint_min",
+                "30",
+                "-sc_threshold",
+                "0",
+                "-an",
+            ])
+            .arg(&source)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+        assert!(status.is_ok() && status.unwrap().success());
+
+        // Segment the source into real fMP4 HLS fragments (init + moof/mdat).
+        let status = Command::new("ffmpeg")
+            .current_dir(&session_dir)
+            .args([
+                "-y",
+                "-i",
+            ])
+            .arg(&source)
+            .args([
+                "-c",
+                "copy",
+                "-an",
+                "-f",
+                "hls",
+                "-hls_time",
+                "1",
+                "-hls_segment_type",
+                "fmp4",
+                "-hls_playlist_type",
+                "vod",
+                "-hls_fmp4_init_filename",
+                "init.mp4",
+                "-hls_segment_filename",
+                "seg%03d.m4s",
+                "playlist.m3u8",
+            ])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+        assert!(status.is_ok() && status.unwrap().success());
+
+        let init = fs::read(session_dir.join("init.mp4")).unwrap();
+        let mut fragment_names: Vec<String> = fs::read_dir(&session_dir)
+            .unwrap()
+            .flatten()
+            .filter_map(|entry| {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) == Some("m4s") {
+                    path.file_name().and_then(|n| n.to_str()).map(str::to_string)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        fragment_names.sort();
+        assert!(!fragment_names.is_empty());
+
+        // Replace ffmpeg's HLS playlist with the recorder's own playlist.
+        let _ = fs::remove_file(session_dir.join("playlist.m3u8"));
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        for (index, name) in fragment_names.iter().enumerate() {
+            let fragment = fs::read(session_dir.join(name)).unwrap();
+            let mut fmp4 = Vec::with_capacity(init.len() + fragment.len());
+            fmp4.extend_from_slice(&init);
+            fmp4.extend_from_slice(&fragment);
+            let ts_path = session_dir.join(format!("test_seg{:06}.ts", index + 1));
+            runtime
+                .block_on(convert_to_ts(fmp4, &ts_path))
+                .expect("fMP4 segment conversion failed");
+            append_to_m3u8(&session_dir, &ts_path, 1.0, false);
+        }
+
+        let output_video = temp_dir.join("final_fmp4.mp4");
+        let emitter: Arc<dyn Emitter> = Arc::new(NoopEmitter);
+        let settings = Settings::default();
+        let session_dir_str = session_dir.to_string_lossy().to_string();
+        let duration = merge_segments(
+            &session_dir,
+            &output_video,
+            "test_user",
+            &emitter,
+            &session_dir_str,
+            &settings,
+        );
+        assert!(duration.is_some());
+        assert!(output_video.exists());
+
+        let source_frames = probe_video_frame_count(&source);
+        let output_frames = probe_video_frame_count(&output_video);
+        assert!(
+            (source_frames as i64 - output_frames as i64).abs() <= 1,
+            "frame loss across {} fMP4 segments: source={} merged={}",
+            fragment_names.len(),
+            source_frames,
+            output_frames
+        );
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    fn probe_video_frame_count(path: &std::path::Path) -> u64 {
+        let output = Command::new("ffprobe")
+            .args([
+                "-v",
+                "error",
+                "-count_frames",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=nb_read_frames",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+            ])
+            .arg(path)
+            .output()
+            .expect("ffprobe failed to run");
+        assert!(output.status.success(), "ffprobe failed for {:?}", path);
+        String::from_utf8_lossy(&output.stdout)
+            .trim()
+            .trim_end_matches(',')
+            .lines()
+            .next()
+            .and_then(|v| v.trim().parse::<u64>().ok())
+            .unwrap_or_else(|| panic!("could not read frame count for {:?}", path))
+    }
+
+    #[test]
+    fn test_playlist_rewound_detects_restart() {
+        assert!(!playlist_rewound(None, Some(1)));
+        assert!(!playlist_rewound(Some(103), Some(104)));
+        assert!(!playlist_rewound(Some(103), Some(103)));
+        assert!(!playlist_rewound(Some(103), Some(100)));
+        assert!(playlist_rewound(Some(104), Some(3)));
+        assert!(playlist_rewound(Some(104), Some(1)));
+        assert!(playlist_rewound(Some(1000), Some(900)));
+    }
+
+    #[test]
+    fn test_pending_segments_ignore_reused_sequence_numbers() {
         use crate::recording::hls::HlsSegment;
-        let mut downloaded_sequences: HashSet<u32> = HashSet::new();
-        let mut downloaded_urls: HashSet<String> = HashSet::new();
-        let mut last_sequence: Option<u32> = None;
 
-        let simulate_round = |segments: Vec<HlsSegment>,
-                              downloaded_sequences: &mut HashSet<u32>,
-                              downloaded_urls: &mut HashSet<String>,
-                              last_sequence: &mut Option<u32>|
-         -> Vec<u32> {
-            let mut pending_sequences = Vec::new();
-            for segment in segments {
-                let clean_url = segment.url.split(['?', '#']).next().unwrap_or(&segment.url);
-                let is_duplicate = downloaded_sequences.contains(&segment.sequence)
-                    || downloaded_urls.contains(clean_url)
-                    || downloaded_urls.contains(&segment.url);
+        // The old stream wrote a segment with sequence 100.  After a reconnect
+        // the new stream reuses sequence 100 but has a different URL path.
+        // Sequence-based dedupe used to skip it; URL-based dedupe must keep it.
+        let downloaded_urls: HashSet<String> =
+            ["https://cdn.example.com/hls/old_100.mp4".to_string()]
+                .into_iter()
+                .collect();
+        let segments = vec![
+            HlsSegment {
+                url: "https://cdn.example.com/hls/new_100.mp4?token=2".to_string(),
+                sequence: 100,
+                duration_secs: 2.0,
+            },
+            HlsSegment {
+                url: "https://cdn.example.com/hls/new_101.mp4?token=2".to_string(),
+                sequence: 101,
+                duration_secs: 2.0,
+            },
+        ];
 
-                if is_duplicate {
-                    continue;
-                }
+        let pending = collect_pending_segments(segments, &downloaded_urls);
+        assert_eq!(pending.len(), 2);
+        assert_eq!(pending[0].sequence, 100);
+        assert_eq!(pending[1].sequence, 101);
+    }
 
-                if let Some(prev) = *last_sequence {
-                    if prev > 50 && (segment.sequence <= 10 || prev.saturating_sub(segment.sequence) > 50) {
-                        downloaded_sequences.clear();
-                        downloaded_urls.clear();
-                        *last_sequence = None;
-                    }
-                }
+    #[test]
+    fn test_pending_segments_dedupe_by_path_not_query_token() {
+        use crate::recording::hls::HlsSegment;
 
-                pending_sequences.push(segment.sequence);
-                *last_sequence = Some(segment.sequence);
-                downloaded_sequences.insert(segment.sequence);
-                downloaded_urls.insert(clean_url.to_string());
-                downloaded_urls.insert(segment.url.clone());
-            }
-            pending_sequences
-        };
-
-        let seg = |seq: u32| HlsSegment {
-            url: format!("https://cdn.example.com/hls/model_{}.mp4", seq),
-            sequence: seq,
+        let downloaded_urls: HashSet<String> =
+            ["https://cdn.example.com/hls/model_100.mp4".to_string()]
+                .into_iter()
+                .collect();
+        let rotated_token = vec![HlsSegment {
+            url: "https://cdn.example.com/hls/model_100.mp4?token=999".to_string(),
+            sequence: 100,
             duration_secs: 2.0,
-        };
+        }];
+        assert!(collect_pending_segments(rotated_token, &downloaded_urls).is_empty());
 
-        // Round 1: Live window [100, 101, 102]
-        let r1 = simulate_round(
-            vec![seg(100), seg(101), seg(102)],
-            &mut downloaded_sequences,
-            &mut downloaded_urls,
-            &mut last_sequence,
-        );
-        assert_eq!(r1, vec![100, 101, 102]);
-        assert_eq!(last_sequence, Some(102));
-
-        // Round 2: Sliding window advances by 1 [101, 102, 103]
-        // 101 and 102 MUST be skipped as duplicates without triggering false reset!
-        let r2 = simulate_round(
-            vec![seg(101), seg(102), seg(103)],
-            &mut downloaded_sequences,
-            &mut downloaded_urls,
-            &mut last_sequence,
-        );
-        assert_eq!(r2, vec![103]);
-        assert_eq!(last_sequence, Some(103));
-
-        // Round 3: Sliding window advances by 1 [102, 103, 104]
-        let r3 = simulate_round(
-            vec![seg(102), seg(103), seg(104)],
-            &mut downloaded_sequences,
-            &mut downloaded_urls,
-            &mut last_sequence,
-        );
-        assert_eq!(r3, vec![104]);
-        assert_eq!(last_sequence, Some(104));
-
-        // Round 4: Genuine stream restart from sequence 1 [1, 2, 3]
-        let r4 = simulate_round(
-            vec![seg(1), seg(2), seg(3)],
-            &mut downloaded_sequences,
-            &mut downloaded_urls,
-            &mut last_sequence,
-        );
-        assert_eq!(r4, vec![1, 2, 3]);
-        assert_eq!(last_sequence, Some(3));
+        // A URL repeated inside one playlist must only be returned once.
+        let repeated = vec![
+            HlsSegment {
+                url: "https://cdn.example.com/hls/model_200.mp4".to_string(),
+                sequence: 200,
+                duration_secs: 2.0,
+            },
+            HlsSegment {
+                url: "https://cdn.example.com/hls/model_200.mp4?token=2".to_string(),
+                sequence: 200,
+                duration_secs: 2.0,
+            },
+        ];
+        let pending = collect_pending_segments(repeated, &downloaded_urls);
+        assert_eq!(pending.len(), 1);
     }
 
     #[test]
