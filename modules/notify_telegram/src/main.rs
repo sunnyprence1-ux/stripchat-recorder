@@ -1807,6 +1807,17 @@ fn backoff_secs(attempt: u32, delays: &[u64]) -> u64 {
     delays[(attempt as usize).min(delays.len() - 1)]
 }
 
+/// 这些错误重试多少次都不会成功，必须立即失败，避免同一个文件被反复上传。
+/// These errors are deterministic; retrying only re-uploads the same file again.
+fn is_permanent_telegram_error(message: &str) -> bool {
+    message.contains("unexpected constructor")
+        || message.contains("CHANNEL_INVALID")
+        || message.contains("CHAT_INVALID")
+        || message.contains("USER_INVALID")
+        || message.contains("BOT_METHOD_INVALID")
+        || message.contains("PEER_ID_INVALID")
+}
+
 /// 一个已构造好的分块 RPC。请求只构造一次，重试时重复借用同一个对象，
 /// 不再为每次尝试克隆 512KB 的 `Vec<u8>`。
 ///
@@ -2332,6 +2343,9 @@ async fn send_standalone_photo(
             Err(e) => {
                 send_attempt += 1;
                 let err = format!("send_message (cover photo) failed: {}", e);
+                if is_permanent_telegram_error(&err) {
+                    return Err(err);
+                }
                 if send_attempt >= MAX_SEND {
                     return Err(err);
                 }
@@ -2383,6 +2397,10 @@ async fn commit_media(
                     .ok_or_else(|| "UploadMedia returned unrecognized media type".to_string());
             }
             Err(e) => {
+                let message = e.to_string();
+                if is_permanent_telegram_error(&message) {
+                    return Err(format!("UploadMedia failed permanently: {}", message));
+                }
                 let server_wait = rpc_wait_secs(&e);
                 attempt += 1;
                 if attempt >= MAX_RETRIES {
@@ -2715,6 +2733,9 @@ async fn upload_and_send(
                         Ok(_) => break,
                         Err(e) => {
                             let msg = format!("send_album (batch {}) failed: {}", batch_idx + 1, e);
+                            if is_permanent_telegram_error(&msg) {
+                                return Err(msg);
+                            }
                             if msg.contains("FILE_PART_MISSING") {
                                 need_reupload = true;
                                 send_err = msg;
@@ -2766,6 +2787,9 @@ async fn upload_and_send(
                 Err(e) => {
                     send_attempt += 1;
                     let err = format!("send_message (photo) failed: {}", e);
+                    if is_permanent_telegram_error(&err) {
+                        return Err(err);
+                    }
                     if send_attempt >= MAX_SEND {
                         invalidate_topic_on_error(chat_id, model_name, &err);
                         return Err(err);
@@ -2793,6 +2817,9 @@ async fn upload_and_send(
                 Err(e) => {
                     send_attempt += 1;
                     let err = format!("send_message (text) failed: {}", e);
+                    if is_permanent_telegram_error(&err) {
+                        return Err(err);
+                    }
                     if send_attempt >= MAX_SEND {
                         invalidate_topic_on_error(chat_id, model_name, &err);
                         return Err(err);
@@ -3553,6 +3580,9 @@ fn run() -> Result<(), String> {
             match result {
                 Ok(()) => break Ok(()),
                 Err(e) => {
+                    if is_permanent_telegram_error(&e) {
+                        break Err(e);
+                    }
                     attempt += 1;
                     if attempt >= MAX_OUTER { break Err(e); }
                     eprintln!(
