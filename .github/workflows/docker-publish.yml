@@ -38,6 +38,30 @@ jobs:
       - name: Run backend tests
         run: cargo test --manifest-path backend/Cargo.toml --lib
 
+  # Compile the post-process modules on the runner so Rust never builds on the VPS.
+  # Cargo diagnostics are mirrored as annotations when a module fails to compile.
+  module-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Check Telegram module
+        shell: bash
+        run: |
+          set +e
+          cargo check --manifest-path modules/notify_telegram/Cargo.toml 2>&1 | tee /tmp/telegram-check.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            grep -E '^(error| *-->)' /tmp/telegram-check.log | while IFS= read -r line; do
+              echo "::error::$line"
+            done
+            exit "$status"
+          fi
+
   build:
     runs-on: ubuntu-latest
     permissions:
