@@ -22,7 +22,10 @@ pub fn run_postprocess_for_path(
 ) {
     let path_str = video_path.to_string_lossy().to_string();
 
-    state.pp_task_enqueue(&path_str);
+    if !state.pp_task_claim(&path_str) {
+        tracing::info!("pp task already running, skip duplicate: {}", path_str);
+        return;
+    }
     emitter.emit(
         "postprocess-waiting",
         &serde_json::json!({ "path": path_str }),
@@ -250,6 +253,19 @@ pub fn run_postprocess_for_path_inner(
                     "failed": report.failed,
                     "reason": "uploaded",
                 }),
+            );
+        },
+        // 每个节点完成后立即写入 meta，避免后续模块失败时已成功的发送模块
+        // 在最终写回前丢失，导致重新运行再次发送。
+        |result: &NodeResult| {
+            crate::recording::meta::record_pp_module_result(
+                &settings,
+                video_path,
+                &crate::recording::meta::PpModuleResult {
+                    module_id: result.module_id.clone(),
+                    success: result.success,
+                    message: result.message.clone(),
+                },
             );
         },
     );

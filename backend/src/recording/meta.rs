@@ -478,6 +478,29 @@ pub fn set_status(settings: &Settings, video_path: &Path, status: &str) {
     write_meta(settings, video_path, &meta);
 }
 
+/// 立即把一个模块的后处理结果写入 meta（不改动 status）。
+/// Persist one module result immediately without changing the recording status.
+///
+/// 这是为了避免流水线后面的模块失败/重试时，前面已成功的模块（如 Telegram）
+/// 在 meta 最终写回之前丢失，导致重新运行时重复发送。
+pub fn record_pp_module_result(
+    settings: &Settings,
+    video_path: &Path,
+    result: &PpModuleResult,
+) {
+    // meta 已被 delete_after_send 清理时不要重建，否则会留下幽灵元数据。
+    let Some(mut meta) = read_meta(settings, video_path) else {
+        return;
+    };
+    let results = meta.pp_results.get_or_insert_with(Vec::new);
+    if let Some(existing) = results.iter_mut().find(|r| r.module_id == result.module_id) {
+        *existing = result.clone();
+    } else {
+        results.push(result.clone());
+    }
+    write_meta(settings, video_path, &meta);
+}
+
 /// 后处理完成时更新 meta：写入最终状态、各模块结果和输出路径。
 /// Update meta when post-processing completes: write final status, module results, and output paths.
 pub fn set_pp_done(
@@ -1031,6 +1054,71 @@ mod tests {
         .unwrap();
         cleanup_orphaned_meta_files(&settings);
         assert!(!dead_meta.exists(), "orphaned meta should be deleted");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn record_pp_module_result_upserts_without_changing_status() {
+        let root = temp_root("pp_result");
+        let out = root.join("out");
+        let fin = root.join("fin");
+        let settings = Settings {
+            output_dir: out.to_string_lossy().to_string(),
+            final_video_dir: fin.to_string_lossy().to_string(),
+            ..Settings::default()
+        };
+        let video = fin.join("model").join("model_20260101_120000.mp4");
+        std::fs::create_dir_all(video.parent().unwrap()).unwrap();
+        std::fs::write(&video, b"x").unwrap();
+        write_meta(&settings, &video, &sample_meta("pp_running"));
+
+        record_pp_module_result(
+            &settings,
+            &video,
+            &PpModuleResult {
+                module_id: "notify_telegram".to_string(),
+                success: true,
+                message: "sent".to_string(),
+            },
+        );
+        record_pp_module_result(
+            &settings,
+            &video,
+            &PpModuleResult {
+                module_id: "upload_gdrive".to_string(),
+                success: false,
+                message: "not signed in".to_string(),
+            },
+        );
+
+        let meta = read_meta(&settings, &video).unwrap();
+        assert_eq!(meta.status, "pp_running");
+        let results = meta.pp_results.unwrap();
+        assert_eq!(results.len(), 2);
+        assert!(results.iter().any(|r| r.module_id == "notify_telegram" && r.success));
+        assert!(results.iter().any(|r| r.module_id == "upload_gdrive" && !r.success));
+
+        // 更新同一模块不应产生重复记录 / Upserting the same module must not duplicate
+        record_pp_module_result(
+            &settings,
+            &video,
+            &PpModuleResult {
+                module_id: "notify_telegram".to_string(),
+                success: true,
+                message: "sent again flag".to_string(),
+            },
+        );
+        let results = read_meta(&settings, &video).unwrap().pp_results.unwrap();
+        assert_eq!(results.len(), 2);
+        assert_eq!(
+            results
+                .iter()
+                .find(|r| r.module_id == "notify_telegram")
+                .unwrap()
+                .message,
+            "sent again flag"
+        );
 
         let _ = std::fs::remove_dir_all(&root);
     }

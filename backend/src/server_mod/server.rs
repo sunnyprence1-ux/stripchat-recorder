@@ -803,7 +803,9 @@ async fn run_postprocess(
     let video_path = std::path::PathBuf::from(&body.path);
     let emitter = Arc::clone(&s.emitter);
     let state = Arc::clone(&s.app_state);
-    state.pp_task_enqueue(&body.path);
+    if !state.pp_task_claim(&body.path) {
+        return Ok(Json(serde_json::json!({ "ok": true, "skipped": "already running" })));
+    }
     emitter.emit(
         "postprocess-waiting",
         &serde_json::json!({ "path": body.path }),
@@ -837,7 +839,9 @@ async fn run_postprocess_batch(
         let emitter = Arc::clone(&s.emitter);
         let state = Arc::clone(&s.app_state);
         let pipeline = pipeline.clone();
-        state.pp_task_enqueue(&path);
+        if !state.pp_task_claim(&path) {
+            continue;
+        }
         emitter.emit("postprocess-waiting", &serde_json::json!({ "path": path }));
         tokio::task::spawn_blocking(move || {
             crate::commands::postprocess_cmd::run_postprocess_for_path_inner(

@@ -1053,6 +1053,41 @@ impl AppState {
             .or_insert_with(|| Arc::new(AtomicBool::new(false)));
     }
 
+    /// 原子地认领一个后处理任务：同一视频同时只允许一个流水线运行。
+    /// Atomically claim a post-processing path: only one pipeline per video may run.
+    ///
+    /// 返回 false 表示已有 waiting/running 任务，调用方必须直接跳过，避免
+    /// 两个流水线同时跑到 Telegram 模块而重复发送。
+    pub fn pp_task_claim(&self, path: &str) -> bool {
+        {
+            let mut tasks = self.pp_tasks.write();
+            if let Some(existing) = tasks.get(path)
+                && (existing.status == "waiting" || existing.status == "running")
+            {
+                return false;
+            }
+            tasks.insert(
+                path.to_string(),
+                PpTaskStatus {
+                    path: path.to_string(),
+                    pct: 0.0,
+                    mod_done: 0,
+                    mod_total: 0,
+                    module_name: String::new(),
+                    done: 0,
+                    total: 0,
+                    status: "waiting".to_string(),
+                    from_memory: true,
+                },
+            );
+        }
+        self.pp_cancel_flags
+            .write()
+            .entry(path.to_string())
+            .or_insert_with(|| Arc::new(AtomicBool::new(false)));
+        true
+    }
+
     /// 将指定文件路径的后处理任务标记为运行中。
     /// Mark the post-processing task for the given file path as running.
     pub fn pp_task_start(&self, path: &str, total: usize) {

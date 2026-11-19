@@ -277,6 +277,7 @@ pub fn run_pipeline(
     on_progress: impl Fn(usize, usize, u32, u32, &str, &str),
     on_log: impl Fn(&str, &str, &str),
     on_delete_input: impl Fn(&std::path::Path),
+    on_node_result: impl Fn(&NodeResult),
 ) -> Vec<NodeResult> {
     let mut results = Vec::new();
     let mut current_input = video_path.to_path_buf();
@@ -359,6 +360,10 @@ pub fn run_pipeline(
         if result.delete_input {
             on_delete_input(&current_input);
         }
+
+        // 立即持久化本节点结果。后续节点失败或重试时，已成功的发送模块
+        // （Telegram/Discord/Drive）不会在 meta 最终写回前丢失。
+        on_node_result(&result);
 
         match &result.output {
             Some(out) => {
