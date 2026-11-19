@@ -71,7 +71,7 @@ use std::time::{Duration, Instant};
 use futures::stream::{FuturesUnordered, StreamExt};
 use grammers_client::Client;
 use grammers_client::InvocationError;
-use grammers_client::client::{ClientConfiguration, AutoSleep};
+use grammers_client::client::ClientConfiguration;
 use grammers_client::media::{InputMedia, Uploaded};
 use grammers_client::message::InputMessage;
 use grammers_client::peer::Peer;
@@ -1022,13 +1022,9 @@ async fn open_client(api_id: i32, proxy: &str, mode: SessionMode, session_privat
     let pool = SenderPool::with_configuration(Arc::clone(&session), api_id, conn_params);
     let runner = pool.runner;
     tokio::spawn(async move { runner.run().await });
-    // 配置激进的 retry policy：I/O 错误视为 5 秒 flood，flood wait 阈值提高到 5 分钟
-    // Aggressive retry policy: treat I/O errors as 5s flood, raise flood-wait threshold to 5 min
+    // grammers 0.12 移除了自定义 retry_policy；flood wait 由 sender 自己处理。
+    // grammers 0.12 removed the custom retry_policy hook; flood waits are handled by the sender.
     Ok(Client::with_configuration(pool.handle, ClientConfiguration {
-        retry_policy: Box::new(AutoSleep {
-            threshold: Duration::from_secs(300),
-            io_errors_as_flood_of: Some(Duration::from_secs(5)),
-        }),
         auto_cache_peers: true,
     }))
 }
@@ -1277,6 +1273,12 @@ fn chat_kind_and_title(chat: &tl::enums::Chat) -> (ChatKind, Option<String>) {
         ),
         tl::enums::Chat::Chat(c) => (ChatKind::BasicGroup, Some(c.title.clone())),
         tl::enums::Chat::Forbidden(c) => (ChatKind::BasicGroup, Some(c.title.clone())),
+        tl::enums::Chat::CommunityForbidden(c) => {
+            (ChatKind::Supergroup { forum: true }, Some(c.title.clone()))
+        }
+        tl::enums::Chat::Community(c) => {
+            (ChatKind::Supergroup { forum: true }, Some(c.title.clone()))
+        }
         tl::enums::Chat::Empty(_) => (ChatKind::Unknown, None),
     }
 }
@@ -1287,6 +1289,7 @@ fn peer_kind_and_title(peer: &Peer) -> (ChatKind, Option<String>) {
         Peer::User(_) => (ChatKind::User, peer.name().map(str::to_string)),
         Peer::Channel(c) => (ChatKind::Broadcast, Some(c.raw.title.clone())),
         Peer::Group(g) => chat_kind_and_title(&g.raw),
+        Peer::Community(c) => (ChatKind::Supergroup { forum: true }, Some(c.raw.title.clone())),
     }
 }
 
@@ -1397,7 +1400,9 @@ async fn fetch_chat(client: &Client, peer: &PeerRef) -> Result<Option<tl::enums:
         ),
         PeerKind::Chat => chats_of(
             client
-                .invoke(&tl::functions::messages::GetChats { id: vec![peer.id.bare_id()] })
+                .invoke(&tl::functions::messages::GetChats {
+                    id: vec![peer.id.bare_id().ok_or_else(|| "chat id unavailable".to_string())?],
+                })
                 .await
                 .map_err(|e| format!("messages.getChats failed: {}", e))?,
         ),
@@ -1430,6 +1435,7 @@ async fn resolve_target(
         let peer_ref = peer
             .to_ref()
             .await
+            .map_err(|e| format!("@{} peer_ref lookup failed: {}", username, e))?
             .ok_or_else(|| format!("@{} peer_ref unavailable", username))?;
         let (kind, title) = peer_kind_and_title(&peer);
         return Ok(Target { peer: peer_ref, kind, title });
@@ -1439,7 +1445,7 @@ async fn resolve_target(
 
     match find_peer_in_dialogs(client, &candidates).await {
         Ok(Some(found)) => {
-            if let Some(peer_ref) = found.to_ref().await {
+            if let Ok(Some(peer_ref)) = found.to_ref().await {
                 let (kind, title) = peer_kind_and_title(&found);
                 if found.id() != candidates[0] {
                     println!(
@@ -2581,6 +2587,8 @@ async fn upload_and_send(
                 file: uploaded.raw,
                 stickers: None,
                 ttl_seconds: None,
+                live_photo: None,
+                video: None,
             }.into();
             Some(commit_media(client, &peer, raw).await?)
         } else { None };
@@ -2990,7 +2998,7 @@ async fn upload_limit_bytes(client: &Client, mode: SessionMode) -> u64 {
         return TG_MAX_BYTES_STD;
     }
     match client.get_me().await {
-        Ok(me) if me.is_premium() => {
+        Ok(me) if user_is_premium(&me) => {
             println!("account: premium user detected, single-file limit raised to 4GB");
             TG_MAX_BYTES_PREMIUM
         }
@@ -3172,6 +3180,8 @@ async fn self_test(cfg: &TgConfig) -> Result<(), String> {
                 file: uploaded.raw,
                 stickers: None,
                 ttl_seconds: None,
+                live_photo: None,
+                video: None,
             }.into();
             let media = commit_media(&client, &peer, raw).await?;
             let msg = InputMessage::new().copy_media(&media).reply_to(topic_id);
@@ -3319,6 +3329,15 @@ async fn read_login_command(lines: &mut LoginStdin) -> Option<String> {
     }
 }
 
+/// grammers 0.12 移除了 `is_premium()`；直接从原始 TL 对象读取 premium 标记。
+/// grammers 0.12 removed `is_premium()`; read the flag from the raw TL object.
+fn user_is_premium(user: &grammers_client::peer::User) -> bool {
+    match &user.raw {
+        tl::enums::User::User(u) => u.premium,
+        tl::enums::User::Empty(_) => false,
+    }
+}
+
 /// 把用户信息格式化为 `名称:是否高级会员`。
 /// Format a signed-in user as `name:premium`.
 fn login_user_summary(user: &grammers_client::peer::User) -> String {
@@ -3327,13 +3346,16 @@ fn login_user_summary(user: &grammers_client::peer::User) -> String {
         None => {
             let full = user.full_name();
             if full.trim().is_empty() {
-                user.id().bare_id().to_string()
+                user.id()
+                    .bare_id()
+                    .map(|id| id.to_string())
+                    .unwrap_or_else(|| "unknown".to_string())
             } else {
                 full
             }
         }
     };
-    format!("{}:{}", name, if user.is_premium() { "premium" } else { "standard" })
+    format!("{}:{}", name, if user_is_premium(user) { "premium" } else { "standard" })
 }
 
 /// 交互式登录：通过 stdin/stdout 行协议完成「手机号 → 验证码 →（两步验证密码）」，
