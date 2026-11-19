@@ -56,9 +56,12 @@ jobs:
           cargo check --manifest-path modules/notify_telegram/Cargo.toml 2>&1 | tee /tmp/telegram-check.log
           status=${PIPESTATUS[0]}
           if [ "$status" -ne 0 ]; then
-            grep -E '^(error| *-->)' /tmp/telegram-check.log | while IFS= read -r line; do
-              echo "::error::$line"
-            done
+            {
+              echo "### Telegram module check"
+              echo '```text'
+              cat /tmp/telegram-check.log
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
             exit "$status"
           fi
 
