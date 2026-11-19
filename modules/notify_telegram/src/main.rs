@@ -2587,7 +2587,7 @@ async fn upload_and_send(
                 file: uploaded.raw,
                 stickers: None,
                 ttl_seconds: None,
-                live_photo: None,
+                live_photo: false,
                 video: None,
             }.into();
             Some(commit_media(client, &peer, raw).await?)
@@ -3180,7 +3180,7 @@ async fn self_test(cfg: &TgConfig) -> Result<(), String> {
                 file: uploaded.raw,
                 stickers: None,
                 ttl_seconds: None,
-                live_photo: None,
+                live_photo: false,
                 video: None,
             }.into();
             let media = commit_media(&client, &peer, raw).await?;
