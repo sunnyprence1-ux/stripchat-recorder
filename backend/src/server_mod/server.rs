@@ -935,6 +935,7 @@ async fn telegram_relogin(AxumState(s): AxumState<ServerState>) -> ApiResult<ser
     let params = crate::commands::telegram_cmd::pipeline_params(&state);
     let api_id = crate::commands::telegram_cmd::param_str(&params, "api_id");
     let proxy = crate::commands::telegram_cmd::param_str(&params, "proxy");
+    let session_label = crate::commands::telegram_cmd::param_str(&params, "session_label");
     let module = crate::commands::telegram_cmd::find_module();
 
     if api_id.is_empty() {
@@ -955,8 +956,9 @@ async fn telegram_relogin(AxumState(s): AxumState<ServerState>) -> ApiResult<ser
         let exe = module.exe_path.clone();
         let api_id = api_id.clone();
         let proxy = proxy.clone();
+        let session_label = session_label.clone();
         let (success, stdout, stderr) = tokio::task::spawn_blocking(move || {
-            crate::commands::telegram_cmd::run_refresh(&exe, &api_id, &proxy)
+            crate::commands::telegram_cmd::run_refresh(&exe, &api_id, &proxy, &session_label)
         })
         .await
         .map_err(|e| ApiError(e.to_string()))?;

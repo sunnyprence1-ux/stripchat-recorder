@@ -1,9 +1,15 @@
 {
-  "name": "Telegram Notification 0.5.0",
-  "description": "Send finished videos to Telegram via MTProto (files over 50 MB and HTTP/SOCKS5 proxies supported). Posts the video only by default — no text at all; the text caption and the cover image each have their own switch. Can create/reuse one group forum topic per model and post the video into it. Uses your signed-in account by default: it can list existing topics (no duplicates) and premium accounts can upload single files up to 4 GB",
+  "name": "Telegram Notification 0.6.0",
+  "description": "Send finished videos to Telegram via MTProto (files over 50 MB and HTTP/SOCKS5 proxies supported). Posts the video only by default — no text at all; the text caption and the cover image each have their own switch. Can create/reuse one group forum topic per model and post the video into it. Uses your signed-in account by default: it can list existing topics (no duplicates) and premium accounts can upload single files up to 4 GB. Supports multiple user sessions: when the current account is upload-throttled, the next signed-in account is used and the file is re-uploaded",
   "params": {
     "account": {
       "label": "Login mode (auto = your signed-in account wins / user = your account only / bot = bot account only)"
+    },
+    "session_label": {
+      "label": "Current session label (blank = primary {api_id}_user.db; enter a label such as backup1 when signing in another account)"
+    },
+    "fallback_sessions": {
+      "label": "Backup session labels (comma separated, e.g. backup1,backup2. On FLOOD_WAIT / FLOOD_PREMIUM_WAIT the next signed-in account is tried and the whole file is re-uploaded)"
     },
     "api_id": {
       "label": "API ID (from my.telegram.org)"
@@ -33,7 +39,7 @@
       "label": "Also send the cover image (a frame extracted from the video). With this off the album holds the video only"
     },
     "cover_first": {
-      "label": "Post the cover image on its own first, then upload and send the video. With this off the cover and the video go out together as one album message"
+      "label": "Upload the cover first; once the video upload finishes, post the cover as its own message before the video. With this off the cover and the video go out together as one album message"
     },
     "topic_per_model": {
       "label": "Create/reuse a group topic per model and upload into it"

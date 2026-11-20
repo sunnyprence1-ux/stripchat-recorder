@@ -89,8 +89,8 @@ const PROGRESS_SCALE: usize = 10_000;
 /// Module metadata JSON, output via `--describe` argument.
 const DESCRIBE: &str = r#"{
     "id": "notify_telegram",
-    "name": "Telegram 通知 0.5.0",
-    "description": "把录制好的视频通过 MTProto 发送到 Telegram（支持超过 50MB 的大文件，支持 HTTP/SOCKS5 代理）。默认只发视频、不带任何文字；文字说明和封面图都可以单独开关。可按模特自动创建/复用群组话题（Topic）并把视频发送到对应话题。默认使用已登录的真实账号：可列出话题、避免重复创建，高级会员还能上传 4GB 单文件",
+    "name": "Telegram 通知 0.6.0",
+    "description": "把录制好的视频通过 MTProto 发送到 Telegram（支持超过 50MB 的大文件，支持 HTTP/SOCKS5 代理）。默认只发视频、不带任何文字；文字说明和封面图都可以单独开关。可按模特自动创建/复用群组话题（Topic）并把视频发送到对应话题。默认使用已登录的真实账号：可列出话题、避免重复创建，高级会员还能上传 4GB 单文件。支持多个用户会话：主账号遇到 FLOOD_WAIT / FLOOD_PREMIUM_WAIT 时自动切换到备用账号并重新上传",
     "testable": true,
     "loginable": true,
     "params": [
@@ -100,6 +100,18 @@ const DESCRIBE: &str = r#"{
         "type": "select",
         "default": "auto",
         "options": ["auto", "user", "bot"]
+        },
+        {
+        "key": "session_label",
+        "label": "当前会话标签（留空 = 主会话 {api_id}_user.db；登录备用账号时填写标签，例如 backup1）",
+        "type": "string",
+        "default": ""
+        },
+        {
+        "key": "fallback_sessions",
+        "label": "备用会话标签（逗号分隔，例如 backup1,backup2；主账号遇到 FLOOD_WAIT / FLOOD_PREMIUM_WAIT 时按顺序切换。每个备用账号都要先用对应标签登录；切换后从原文件重新上传）",
+        "type": "string",
+        "default": ""
         },
         {
         "key": "api_id",
@@ -157,7 +169,7 @@ const DESCRIBE: &str = r#"{
         },
         {
         "key": "cover_first",
-        "label": "先把封面图单独作为一条图片消息发出去，再上传并发送视频。关闭后封面图和视频合在同一条相册消息里",
+        "label": "封面图先上传固化，上传完成后单独作为一条图片消息发出去，再发送视频。关闭后封面图和视频合在同一条相册消息里",
         "type": "boolean",
         "default": true
         },
@@ -828,9 +840,16 @@ impl SessionMode {
     /// (so topics are reused instead of duplicated) and premium accounts may upload 4GB in a
     /// single file — so once a login exists there is no reason to keep using the bot.
     fn resolve(self, api_id: i32) -> Self {
+        self.resolve_with_label(api_id, "")
+    }
+
+    /// `auto` 解析时也要认得具名主会话，否则用 session_label 登录的账号会被误判成「未登录」。
+    /// Resolve `auto` while honouring a labeled primary session, so signing in with
+    /// `session_label` is not mistaken for "not signed in".
+    fn resolve_with_label(self, api_id: i32, label: &str) -> Self {
         match self {
             SessionMode::Auto => {
-                if session_path(api_id, SessionMode::User).exists() {
+                if user_session_path(api_id, label).exists() {
                     SessionMode::User
                 } else {
                     SessionMode::Bot
@@ -873,6 +892,90 @@ fn session_path(api_id: i32, mode: SessionMode) -> PathBuf {
         // `auto` is resolved before it gets here; fall back to the bot session file
         SessionMode::Bot | SessionMode::Auto => config_dir_path().join(format!("{}.db", api_id)),
     }
+}
+
+/// 把用户填写的会话标签规范化成安全的文件名片段。
+/// Sanitize a user-supplied session label into a safe filename fragment.
+///
+/// 多个 Telegram 账号可以共用同一个 API ID，所以会话文件按标签区分：
+/// 空标签沿用旧文件 `{api_id}_user.db`，具名标签使用 `{api_id}_user_{label}.db`。
+/// Several Telegram accounts can share one API ID, so sessions are separated by label:
+/// an empty label keeps the legacy `{api_id}_user.db`, named labels use
+/// `{api_id}_user_{label}.db`.
+fn sanitize_session_label(raw: &str) -> String {
+    raw.trim()
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                c.to_ascii_lowercase()
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>()
+        .trim_matches('_')
+        .to_string()
+}
+
+/// 返回带标签的用户会话文件路径。空标签保持原有主会话文件名，保证旧配置不需要重新登录。
+/// Return the labeled user session path. An empty label keeps the legacy primary session file,
+/// so existing configurations never need to sign in again.
+fn user_session_path(api_id: i32, label: &str) -> PathBuf {
+    let clean = sanitize_session_label(label);
+    if clean.is_empty() {
+        session_path(api_id, SessionMode::User)
+    } else {
+        config_dir_path().join(format!("{}_user_{}.db", api_id, clean))
+    }
+}
+
+/// 解析备用会话标签列表（逗号、分号或换行分隔），去重并过滤无效项。
+/// Parse the fallback session label list (comma/semicolon/newline separated), deduplicated.
+fn parse_fallback_labels(raw: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for part in raw.split(|c: char| c == ',' || c == ';' || c == '\n' || c == '\r') {
+        let clean = sanitize_session_label(part);
+        if !clean.is_empty() && !out.contains(&clean) {
+            out.push(clean);
+        }
+    }
+    out
+}
+
+/// 一次发送尝试使用的会话身份：登录方式、标签和实际 session 文件路径。
+/// The session identity used by one send attempt: mode, label and concrete session path.
+#[derive(Debug, Clone)]
+struct SessionIdentity {
+    api_id: i32,
+    mode: SessionMode,
+    label: String,
+    path: PathBuf,
+}
+
+impl SessionIdentity {
+    /// 日志里使用的简短名称 / Short name used in logs.
+    fn display_name(&self) -> String {
+        if self.label.is_empty() {
+            match self.mode {
+                SessionMode::User | SessionMode::Auto => "primary user".to_string(),
+                SessionMode::Bot => "bot".to_string(),
+            }
+        } else {
+            format!("user({})", self.label)
+        }
+    }
+}
+
+/// 根据（已解析的）登录方式和标签构造主会话身份。
+/// Build the primary session identity from a resolved mode and label.
+fn primary_session(api_id: i32, mode: SessionMode, label: &str) -> SessionIdentity {
+    let clean = sanitize_session_label(label);
+    let (mode, label, path) = if mode == SessionMode::Bot {
+        (SessionMode::Bot, String::new(), session_path(api_id, SessionMode::Bot))
+    } else {
+        (SessionMode::User, clean, user_session_path(api_id, label))
+    };
+    SessionIdentity { api_id, mode, label, path }
 }
 
 /// 为当前进程复制一份独立的会话文件副本。
@@ -919,8 +1022,7 @@ fn private_session_copy(path: &Path) -> PathBuf {
 }
 
 /// 清理本进程创建的临时会话副本 / Clean up the temp session copy for this process
-fn cleanup_session_copy(api_id: i32, mode: SessionMode) {
-    let path = session_path(api_id, mode);
+fn cleanup_session_copy(path: &Path) {
     let file_name = path.file_name().and_then(|s| s.to_str()).unwrap_or("session");
     let copy = tmp_dir().join(format!("{}.{}.session", file_name, std::process::id()));
     let _ = std::fs::remove_file(&copy);
@@ -941,8 +1043,8 @@ fn cleanup_session_copy(api_id: i32, mode: SessionMode) {
 /// Requires an authorized session file created by `--login`; if the session is not
 /// authorized, prints a clear login hint instead of leaving the user guessing. On
 /// success stdout prints `LOGIN_STATE:refreshed:...`, on failure prints an error.
-async fn refresh_session(api_id: i32, proxy: &str) -> Result<(), String> {
-    let path = session_path(api_id, SessionMode::User);
+async fn refresh_session(api_id: i32, proxy: &str, label: &str) -> Result<(), String> {
+    let path = user_session_path(api_id, label);
     if !path.is_file() {
         return Err(format!(
             "session file not found at {} — click \"Login\" in the pipeline UI to sign in first",
@@ -951,7 +1053,7 @@ async fn refresh_session(api_id: i32, proxy: &str) -> Result<(), String> {
     }
     // 刷新时必须操作真实会话文件（session_private: false），避免在临时副本上操作
     // Refresh must operate directly on the real session file (session_private: false)
-    let client = open_client(api_id, proxy, SessionMode::User, false).await?;
+    let client = open_client(api_id, proxy, SessionMode::User, Some(&path), false).await?;
 
     if !client
         .is_authorized()
@@ -974,12 +1076,12 @@ async fn refresh_session(api_id: i32, proxy: &str) -> Result<(), String> {
 
 /// 刷新模式入口（`--refresh`）：验证并刷新已授权用户会话（无需手机号或验证码）。
 /// Refresh entry point (`--refresh`): verify and refresh an authorized user session.
-fn run_refresh(api_id: i32, proxy: &str) -> Result<(), String> {
+fn run_refresh(api_id: i32, proxy: &str, label: &str) -> Result<(), String> {
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .map_err(|e| format!("tokio runtime error: {}", e))?
-        .block_on(refresh_session(api_id, proxy))
+        .block_on(refresh_session(api_id, proxy, label))
 }
 
 /// 打开（或创建）会话文件并建立 MTProto 连接，但不做任何鉴权。
@@ -993,8 +1095,16 @@ fn run_refresh(api_id: i32, proxy: &str) -> Result<(), String> {
 /// SQLite write lock (grammers-session `unwrap()s` and panics). Each process
 /// gets its own copy instead: Telegram allows multiple connections with the
 /// same auth key, so no re-login is needed.
-async fn open_client(api_id: i32, proxy: &str, mode: SessionMode, session_private: bool) -> Result<Client, String> {
-    let path = session_path(api_id, mode);
+async fn open_client(
+    api_id: i32,
+    proxy: &str,
+    mode: SessionMode,
+    session_override: Option<&Path>,
+    session_private: bool,
+) -> Result<Client, String> {
+    let path = session_override
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| session_path(api_id, mode));
 
     // 复制出每个进程独立的会话副本，避免 SQLite 锁冲突；登录流程必须写回
     // 原会话文件，因此不走副本
@@ -1045,12 +1155,15 @@ async fn connect_client(
     bot_token: &str,
     proxy: &str,
     mode: SessionMode,
+    session_override: Option<&Path>,
 ) -> Result<Client, String> {
     // `auto` 已经在 read_config 中解析过；这里再兜底一次，保证连接用的总是具体方式
     // `auto` is already resolved in read_config; resolve again here so the connection always
     // uses a concrete mode
     let mode = mode.resolve(api_id);
-    let path = session_path(api_id, mode);
+    let path = session_override
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| session_path(api_id, mode));
 
     // 用户模式：会话文件不存在时直接给出可操作的提示
     // User mode: fail fast with an actionable message when the session file is missing
@@ -1061,7 +1174,7 @@ async fn connect_client(
         ));
     }
 
-    let client = open_client(api_id, proxy, mode, true).await?;
+    let client = open_client(api_id, proxy, mode, Some(&path), true).await?;
 
     let authorized = client
         .is_authorized()
@@ -1824,6 +1937,35 @@ fn is_permanent_telegram_error(message: &str) -> bool {
         || message.contains("PEER_ID_INVALID")
 }
 
+/// 上传阶段遇到限流错误时打上标记，让调用方切换到下一个账号。
+/// 只标记上传/固化阶段：消息发送阶段的限流留在原账号等待，避免重复发帖。
+/// Tag an upload-phase rate limit so the caller can switch accounts. Only upload/commit
+/// errors are tagged: send-phase limits stay on the same account to avoid duplicate posts.
+const FAILOVER_TAG: &str = "FAILOVER:";
+
+/// 错误文本是否包含 Telegram 限流（FLOOD_WAIT / FLOOD_PREMIUM_WAIT…）。
+/// Whether an error message contains a Telegram flood-wait error.
+fn is_flood_error(message: &str) -> bool {
+    let upper = message.to_ascii_uppercase();
+    upper.contains("FLOOD_WAIT") || upper.contains("FLOOD_PREMIUM_WAIT")
+}
+
+/// 给上传阶段的限流错误加标记；非限流错误原样返回。
+/// Tag upload-phase flood errors; leave other errors unchanged.
+fn tag_flood_error(message: String) -> String {
+    if message.starts_with(FAILOVER_TAG) || !is_flood_error(&message) {
+        message
+    } else {
+        format!("{}{}", FAILOVER_TAG, message)
+    }
+}
+
+/// 去掉内部切换标记，保留用户可见的错误文本。
+/// Strip the internal failover marker, keeping the user-visible error text.
+fn untag_failover(message: &str) -> &str {
+    message.strip_prefix(FAILOVER_TAG).unwrap_or(message)
+}
+
 /// 一个已构造好的分块 RPC。请求只构造一次，重试时重复借用同一个对象，
 /// 不再为每次尝试克隆 512KB 的 `Vec<u8>`。
 ///
@@ -1882,7 +2024,14 @@ async fn upload_one_part(
             Ok(false) => ("server rejected part".to_string(), None),
             Err(e) => {
                 let wait = rpc_wait_secs(&e);
-                (e.to_string(), wait)
+                let message = e.to_string();
+                // 单个分块遇到账号级上传限流时不要再等：整次上传换账号重来。
+                // An account-level upload flood on one part should not be waited out here;
+                // the whole upload will be retried with another session.
+                if is_flood_error(&message) {
+                    return Err(message);
+                }
+                (message, wait)
             }
         };
 
@@ -1974,6 +2123,7 @@ async fn upload_parts(
 /// those round trips overlap. Each part still retries on its own, so resumability is unchanged.
 async fn upload_with_progress(
     client: &Client,
+    session: &SessionIdentity,
     path: &Path,
     done: Arc<AtomicUsize>,
     total: usize,
@@ -2006,9 +2156,16 @@ async fn upload_with_progress(
 
     if use_wzgram {
         let before = done.load(Ordering::Relaxed);
-        match upload_via_wzgram(client, path, Arc::clone(&done), total, workers).await {
+        match upload_via_wzgram(session, path, Arc::clone(&done), total, workers).await {
             Ok(uploaded) => return Ok(uploaded),
             Err(err) => {
+                // 限流错误不能靠换上传引擎解决：同一个账号仍然会被限速。
+                // 直接标记，让外层切换到下一个账号并从原文件重新上传。
+                // A flood limit cannot be fixed by switching engines: the same account is still
+                // throttled. Tag it so the caller switches accounts and re-uploads from scratch.
+                if is_flood_error(&err) {
+                    return Err(tag_flood_error(err));
+                }
                 // A failed sidecar may have reported partial progress. Rewind it so
                 // the Rust fallback does not double-count those bytes.
                 eprintln!("UPLOAD_ENGINE: rust (fallback from wzgram)");
@@ -2018,7 +2175,9 @@ async fn upload_with_progress(
         }
     }
 
-    upload_with_workers(client, path, done, total, workers).await
+    upload_with_workers(client, path, done, total, workers)
+        .await
+        .map_err(tag_flood_error)
 }
 
 /// 通过 WZGram 旁进程上传文件分块。
@@ -2027,18 +2186,14 @@ async fn upload_with_progress(
 /// through WZGram and prints `WZ_BYTES:` / `WZ_RESULT:` lines. All Telegram
 /// sending logic stays in this Rust module; only the part upload is delegated.
 async fn upload_via_wzgram(
-    _client: &Client,
+    session: &SessionIdentity,
     path: &Path,
     done: Arc<AtomicUsize>,
     total: usize,
     workers: usize,
 ) -> Result<Uploaded, String> {
-    let api_id: i32 = param("api_id", "")
-        .trim()
-        .parse()
-        .map_err(|_| "api_id is required for WZGram upload".to_string())?;
-    let mode = SessionMode::from_param(&param("account", "auto")).resolve(api_id);
-    let session_file = session_path(api_id, mode);
+    let api_id = session.api_id;
+    let session_file = &session.path;
     if !session_file.exists() {
         return Err(format!(
             "WZGram needs an existing grammers session at {} — sign in first",
@@ -2077,7 +2232,7 @@ async fn upload_via_wzgram(
         .env("PYTHONUNBUFFERED", "1")
         .env("TG_UPLOAD_PATH", path)
         .env("TG_API_ID", api_id.to_string())
-        .env("TG_SESSION_PATH", &session_file)
+        .env("TG_SESSION_PATH", session_file.as_path())
         .env("TG_PROXY", param("proxy", ""))
         .env("TG_WZGRAM_POOL", pool.to_string())
         .stdout(Stdio::piped())
@@ -2403,14 +2558,20 @@ async fn commit_media(
                     .ok_or_else(|| "UploadMedia returned unrecognized media type".to_string());
             }
             Err(e) => {
-                let message = e.to_string();
+                let message = tag_flood_error(e.to_string());
                 if is_permanent_telegram_error(&message) {
                     return Err(format!("UploadMedia failed permanently: {}", message));
+                }
+                // 固化阶段的限流立刻交给外层切换账号，不在同一个账号上空等一小时。
+                // A flood here is the account-level upload limit: switch accounts instead of
+                // sleeping through a one-hour wait on the same session.
+                if message.starts_with(FAILOVER_TAG) {
+                    return Err(message);
                 }
                 let server_wait = rpc_wait_secs(&e);
                 attempt += 1;
                 if attempt >= MAX_RETRIES {
-                    return Err(format!("UploadMedia failed after {} attempts: {}", attempt, e));
+                    return Err(format!("UploadMedia failed after {} attempts: {}", attempt, message));
                 }
                 let delay = server_wait.unwrap_or_else(|| backoff_secs(attempt - 1, &DELAYS));
                 eprintln!("UploadMedia attempt {}/{} failed: {}. retrying in {}s…",
@@ -2428,10 +2589,10 @@ async fn commit_media(
 /// 1. 解析目标会话
 /// 2. 转换封面图格式（若需要）
 /// 3. 转换/重封装视频格式（若需要）
-/// 4. 上传封面图并立即固化
+/// 4. 上传封面图并立即固化（顺序仍早于视频）
 /// 5. 解析/创建话题
-/// 6. `cover_first` 开启时，先把封面图单独作为一条图片消息发出
-/// 7. 并行上传视频缩略图和视频文件，再以相册形式发送视频（每批最多 10 条）
+/// 6. 并行上传视频缩略图和视频文件并固化
+/// 7. `cover_first` 开启时，先把封面图单独作为一条图片消息发出，再发送视频相册（每批最多 10 条）
 ///
 /// 封面图和文字说明都可单独关闭：两者都关时相册里只有视频，消息里没有任何文字。
 /// `cover_first` 关闭时封面图和视频回到同一条相册消息里（旧行为）。
@@ -2440,17 +2601,18 @@ async fn commit_media(
 /// 1. Resolve the target peer
 /// 2. Convert cover image format if needed
 /// 3. Convert/remux video format if needed
-/// 4. Upload the cover image and commit it immediately
+/// 4. Upload the cover image and commit it immediately (still before the video)
 /// 5. Resolve/create the topic
-/// 6. With `cover_first` on, post the cover as its own photo message first
-/// 7. Upload video thumbnails and files, then send the videos as an album (max 10 per batch)
+/// 6. Upload video thumbnails and files and commit them
+/// 7. With `cover_first` on, post the cover as its own photo message, then send the videos as an
+///    album (max 10 per batch)
 ///
 /// The cover image and the text caption can each be switched off; with both off the album holds
 /// the videos only and the message carries no text at all. With `cover_first` off the cover
 /// goes back inside the video album (the previous behaviour).
 #[allow(clippy::too_many_arguments)]
 async fn upload_and_send(
-    client: &Client, mode: SessionMode,
+    client: &Client, session: &SessionIdentity,
     chat_id: i64, username: &str,
     model_name: &str, timestamp: &str, duration_str: &str,
     file_name: &str, file_size_str: &str,
@@ -2581,7 +2743,7 @@ async fn upload_and_send(
 
         // 上传封面图并立即固化 / Upload cover and commit immediately
         let committed_cover: Option<grammers_client::media::Media> = if let Some(img) = effective_cover {
-            let uploaded = upload_with_progress(client, img, Arc::clone(&done), upload_total).await?;
+            let uploaded = upload_with_progress(client, session, img, Arc::clone(&done), upload_total).await?;
             let raw: tl::enums::InputMedia = tl::types::InputMediaUploadedPhoto {
                 spoiler: false,
                 file: uploaded.raw,
@@ -2597,21 +2759,15 @@ async fn upload_and_send(
 
         // 解析/创建该模特对应的群组话题；失败时退化为普通发送，不影响视频上传
         // Resolve/create the group topic for this model; on failure fall back to a normal send
-        let topic_id = resolve_topic_id(client, &target, chat_id, model_name, topic_per_model, mode).await;
+        let topic_id = resolve_topic_id(client, &target, chat_id, model_name, topic_per_model, session.mode).await;
 
-        // 先发封面图：把从视频截取的帧作为一条独立的图片消息发出去，然后才上传视频。
-        // 这样群里立刻能看到预览图，不必等大文件传完；视频随后作为单独的消息到达。
-        //
-        // Cover first: post the extracted video frame as its own photo message, then upload
-        // the video, so the preview shows up immediately instead of waiting for the big upload.
+        // 封面图先上传固化（上面完成），但独立消息放到视频上传之后再发：
+        // 上传阶段若触发限流需要换账号重试，此时群里还没有任何消息，切换不会造成重复发帖。
+        // The cover is uploaded and committed first (above), but its standalone message is
+        // posted after the video upload: an upload-phase flood triggers an account switch
+        // before anything is posted, so failover cannot duplicate messages.
         let cover_in_album =
             !cover_sent_separately(send_video, committed_cover.is_some(), cover_first);
-        if let Some(ref cover_media) = committed_cover
-            && !cover_in_album
-        {
-            send_standalone_photo(client, peer, cover_media, topic_id).await?;
-            println!("      cover image sent as its own message, uploading the video next…");
-        }
 
         // 串行上传每个视频片段及其缩略图，上传后立即固化。
         // Serial upload + immediate commit for each video part and its thumbnail.
@@ -2627,14 +2783,14 @@ async fn upload_and_send(
                     // The thumbnail is tiny; upload it alongside the video to save one RTT.
                     let thumb_fut = async {
                         if let Some(tp) = meta.thumb_path.as_ref() {
-                            let t = upload_with_progress(client, tp, Arc::clone(&done), upload_total).await;
+                            let t = upload_with_progress(client, session, tp, Arc::clone(&done), upload_total).await;
                             let _ = fs::remove_file(tp);
                             t.map(Some)
                         } else {
                             Ok::<Option<Uploaded>, String>(None)
                         }
                     };
-                    let video_fut = upload_with_progress(client, part_path, Arc::clone(&done), upload_total);
+                    let video_fut = upload_with_progress(client, session, part_path, Arc::clone(&done), upload_total);
                     let (thumb_uploaded, video_uploaded) = tokio::try_join!(thumb_fut, video_fut)?;
 
                     // 直接构建 InputMediaUploadedDocument，避免访问私有字段
@@ -2679,6 +2835,15 @@ async fn upload_and_send(
 
         let mut committed_parts = do_upload_and_commit(Arc::clone(&done)).await?;
         for tmp in &converted_parts { let _ = fs::remove_file(tmp); }
+
+        // 所有上传完成后才发封面图独立消息，然后发送视频。
+        // Post the standalone cover only after every upload succeeded, then send the video.
+        if let Some(ref cover_media) = committed_cover
+            && !cover_in_album
+        {
+            send_standalone_photo(client, peer, cover_media, topic_id).await?;
+            println!("      cover image sent as its own message, uploading the video next…");
+        }
 
         let total_parts = committed_parts.len();
 
@@ -2776,10 +2941,10 @@ async fn upload_and_send(
     } else if let Some(img) = effective_cover {
         // 仅发送封面图（文字说明关闭时就是一张纯图片）
         // Send the cover image only (a bare photo when the caption is off)
-        let uploaded = upload_with_progress(client, img, Arc::clone(&done), upload_total).await?;
+        let uploaded = upload_with_progress(client, session, img, Arc::clone(&done), upload_total).await?;
         if let Some(ref tmp) = converted_cover { let _ = fs::remove_file(tmp); }
         if let Some(ref tmp) = resized_cover { let _ = fs::remove_file(tmp); }
-        let topic_id = resolve_topic_id(client, &target, chat_id, model_name, topic_per_model, mode).await;
+        let topic_id = resolve_topic_id(client, &target, chat_id, model_name, topic_per_model, session.mode).await;
         const MAX_SEND: u32 = 5;
         const SEND_RETRY_DELAY: Duration = Duration::from_secs(30);
         let mut send_attempt = 0u32;
@@ -2811,7 +2976,7 @@ async fn upload_and_send(
     } else if let Some((text, entities)) = &caption {
         // 无视频、无封面图：只发送文字消息，发送失败立即重试（不重新上传）
         // No video and no cover: send the text message only; retry without re-uploading
-        let topic_id = resolve_topic_id(client, &target, chat_id, model_name, topic_per_model, mode).await;
+        let topic_id = resolve_topic_id(client, &target, chat_id, model_name, topic_per_model, session.mode).await;
         const MAX_SEND: u32 = 3;
         const SEND_RETRY_DELAY: Duration = Duration::from_secs(30);
         let mut send_attempt = 0u32;
@@ -2927,7 +3092,9 @@ fn read_config() -> Result<TgConfig, String> {
     };
     let api_hash  = param("api_hash", "");
     // 已登录的用户会话不需要 api_hash / A signed-in user session needs no api_hash
-    let mode = SessionMode::from_param(&param("account", "auto")).resolve(api_id);
+    let session_label = param("session_label", "");
+    let mode = SessionMode::from_param(&param("account", "auto"))
+        .resolve_with_label(api_id, &session_label);
     let bot_token = param("bot_token", "");
     if mode == SessionMode::Bot {
         // 先报「没有任何可用账号」——这是最常见的配置错误，api_hash 只是它的附带项
@@ -3085,15 +3252,17 @@ async fn self_test(cfg: &TgConfig) -> Result<(), String> {
         session_path(cfg.api_id, cfg.mode).display()
     );
 
+    let session = primary_session(cfg.api_id, cfg.mode, &param("session_label", ""));
     let client = connect_client(
         cfg.api_id,
         &cfg.api_hash,
         &cfg.bot_token,
         &cfg.proxy,
-        cfg.mode,
+        session.mode,
+        Some(&session.path),
     )
     .await?;
-    println!("      connected");
+    println!("      connected (session: {})", session.display_name());
 
     let target = resolve_target(&client, cfg.chat_id, &cfg.username).await?;
     // 打印 Telegram 眼中的这个会话：群还是频道、是否已开启话题
@@ -3174,7 +3343,7 @@ async fn self_test(cfg: &TgConfig) -> Result<(), String> {
         {
             println!("[5/5] uploading the cover image first ({})…", format_bytes(cover_size as u64));
             let uploaded =
-                upload_with_progress(&client, cp, Arc::clone(&done), total).await?;
+                upload_with_progress(&client, &session, cp, Arc::clone(&done), total).await?;
             let raw: tl::enums::InputMedia = tl::types::InputMediaUploadedPhoto {
                 spoiler: false,
                 file: uploaded.raw,
@@ -3194,13 +3363,13 @@ async fn self_test(cfg: &TgConfig) -> Result<(), String> {
         let thumb_fut = async {
             match thumb_path.as_ref() {
                 Some(tp) => {
-                    let t = upload_with_progress(&client, tp, Arc::clone(&done), total).await;
+                    let t = upload_with_progress(&client, &session, tp, Arc::clone(&done), total).await;
                     t.map(Some)
                 }
                 None => Ok::<Option<Uploaded>, String>(None),
             }
         };
-        let video_fut = upload_with_progress(&client, &clip, Arc::clone(&done), total);
+        let video_fut = upload_with_progress(&client, &session, &clip, Arc::clone(&done), total);
         let (thumb_uploaded, video_uploaded) = tokio::try_join!(thumb_fut, video_fut)?;
 
         println!("      upload finished, committing media…");
@@ -3376,7 +3545,8 @@ async fn login_flow() -> Result<(), String> {
     if api_hash.is_empty() { return Err("api_hash is required".to_string()); }
     let proxy = param("proxy", "");
     let mode = SessionMode::User;
-    let path = session_path(api_id, mode);
+    let label = param("session_label", "");
+    let path = user_session_path(api_id, &label);
 
     let is_force = {
         let val = param("force_login", "");
@@ -3394,7 +3564,7 @@ async fn login_flow() -> Result<(), String> {
 
     // 已存在的用户会话直接复用，无需再次登录
     // Reuse an existing user session instead of signing in again
-    let client = open_client(api_id, &proxy, mode, false).await?;
+    let client = open_client(api_id, &proxy, mode, Some(&path), false).await?;
     login_state(&format!("session:{}", path.display()));
 
     if !is_force && client
@@ -3569,59 +3739,156 @@ fn run() -> Result<(), String> {
     };
     let cover = cover_path_buf.as_deref();
 
-    // 构建 Tokio 运行时，先连接（同时确定单文件上限），再上传发送
-    // Build the Tokio runtime, connect (which also determines the per-file limit), then upload
+    // 构造本次发送可用的会话列表：主会话 + 已登录的备用会话。
+    // Build the session list for this send: the primary session plus signed-in fallbacks.
+    let label = param("session_label", "");
+    let mut sessions = vec![primary_session(api_id, mode, &label)];
+    if sessions[0].mode != SessionMode::Bot {
+        for fallback in parse_fallback_labels(&param("fallback_sessions", "")) {
+            if fallback == sessions[0].label {
+                continue;
+            }
+            let path = user_session_path(api_id, &fallback);
+            if !path.is_file() {
+                eprintln!(
+                    "FAILOVER: skipping backup session {} — no session file at {} (sign in with session_label={} first)",
+                    fallback, path.display(), fallback
+                );
+                continue;
+            }
+            sessions.push(SessionIdentity {
+                api_id,
+                mode: SessionMode::User,
+                label: fallback,
+                path,
+            });
+        }
+    }
+    eprintln!(
+        "TELEGRAM_SESSIONS: {}",
+        sessions.iter().map(|s| s.display_name()).collect::<Vec<_>>().join(" -> ")
+    );
+
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .map_err(|e| format!("tokio runtime error: {}", e))?;
 
-    let (client, max_bytes) = runtime.block_on(async {
-        let client = connect_client(api_id, &api_hash, &bot_token, &proxy, mode).await?;
-        let limit = upload_limit_bytes(&client, mode).await;
-        Ok::<_, String>((client, limit))
-    })?;
-
-    // 超过单文件上限时自动分割（普通账号 2GB，高级会员 4GB）
-    // Split automatically when a file exceeds the limit (2GB, or 4GB for premium accounts)
-    let video_parts: Vec<PathBuf> = if send_video { split_video(&input, max_bytes)? } else { vec![input.clone()] };
-    let is_split = video_parts.len() > 1 || video_parts.first().map(|p| p != &input).unwrap_or(false);
-
-    // 执行异步上传，最多重试 3 次 / Execute the async upload with up to 3 retries
-    runtime.block_on(async {
-        const MAX_OUTER: u32 = 3;
-        const RECONNECT_DELAY: Duration = Duration::from_secs(30);
-        let mut attempt = 0u32;
-        loop {
-            let result = upload_and_send(
-                &client, mode, chat_id, &username,
-                &model_name, &ts_str, &dur_str, &name_str, &size_str,
-                &input, cover.as_deref(), send_video, topic_per_model, &video_parts,
-                send_caption, send_cover, cover_first,
-            ).await;
-            match result {
-                Ok(()) => break Ok(()),
-                Err(e) => {
-                    if is_permanent_telegram_error(&e) {
-                        break Err(e);
-                    }
-                    attempt += 1;
-                    if attempt >= MAX_OUTER { break Err(e); }
-                    eprintln!(
-                        "upload failed (attempt {}/{}): {}. retrying in {:?}…",
-                        attempt, MAX_OUTER, e, RECONNECT_DELAY
-                    );
-                    tokio::time::sleep(RECONNECT_DELAY).await;
-                }
+    // 分割文件是账号相关的（普通 2GB / 高级 4GB），所以每个会话切换后都重新计算。
+    // Split limits depend on the account (2GB vs 4GB premium), so recompute after a switch.
+    let cleanup_parts = |parts: &[PathBuf]| {
+        for part in parts {
+            if part != &input {
+                let _ = fs::remove_file(part);
             }
         }
-    })?;
+    };
 
-    // 清理分割产生的临时片段文件 / Clean up temporary segment files from splitting
-    if is_split {
-        for part in &video_parts {
-            if part != &input { let _ = fs::remove_file(part); }
+    let mut final_error: Option<String> = None;
+    for (idx, session) in sessions.iter().enumerate() {
+        eprintln!(
+            "TELEGRAM_SESSION[{}/{}]: {} ({})",
+            idx + 1,
+            sessions.len(),
+            session.display_name(),
+            session.path.display()
+        );
+
+        // 每个会话独立连接、独立上传；Telegram 的 InputFile ID 与账号/DC 绑定，
+        // 切换账号后必须把整个文件重新上传，不能复用已上传的分块。
+        // Every session connects and uploads independently: Telegram InputFile ids are bound to
+        // the account/DC, so a switch must re-upload the whole file from scratch.
+        let attempt_result: Result<(Vec<PathBuf>, bool), (String, Vec<PathBuf>, bool)> = runtime.block_on(async {
+            const MAX_OUTER: u32 = 3;
+            const RECONNECT_DELAY: Duration = Duration::from_secs(30);
+
+            let client = match connect_client(
+                api_id,
+                &api_hash,
+                &bot_token,
+                &proxy,
+                session.mode,
+                Some(&session.path),
+            )
+            .await
+            {
+                Ok(c) => c,
+                Err(e) => return Err((e, Vec::new(), false)),
+            };
+            let max_bytes = upload_limit_bytes(&client, session.mode).await;
+
+            let video_parts: Vec<PathBuf> = if send_video {
+                match split_video(&input, max_bytes) {
+                    Ok(parts) => parts,
+                    Err(e) => return Err((e, Vec::new(), false)),
+                }
+            } else {
+                vec![input.clone()]
+            };
+            let is_split = video_parts.len() > 1
+                || video_parts.first().map(|p| p != &input).unwrap_or(false);
+
+            let mut attempt = 0u32;
+            loop {
+                let result = upload_and_send(
+                    &client, session, chat_id, &username,
+                    &model_name, &ts_str, &dur_str, &name_str, &size_str,
+                    &input, cover.as_deref(), send_video, topic_per_model, &video_parts,
+                    send_caption, send_cover, cover_first,
+                ).await;
+                match result {
+                    Ok(()) => return Ok((video_parts, is_split)),
+                    Err(e) => {
+                        if is_permanent_telegram_error(&e) {
+                            return Err((e, video_parts, is_split));
+                        }
+                        // 上传阶段限流：立即结束当前会话，交给外层切换账号。
+                        // Upload-phase flood: end this session immediately so the caller switches.
+                        if e.starts_with(FAILOVER_TAG) {
+                            return Err((e, video_parts, is_split));
+                        }
+                        attempt += 1;
+                        if attempt >= MAX_OUTER {
+                            return Err((e, video_parts, is_split));
+                        }
+                        eprintln!(
+                            "upload failed on {} (attempt {}/{}): {}. retrying in {:?}…",
+                            session.display_name(), attempt, MAX_OUTER, e, RECONNECT_DELAY
+                        );
+                        tokio::time::sleep(RECONNECT_DELAY).await;
+                    }
+                }
+            }
+        });
+
+        cleanup_session_copy(&session.path);
+
+        match attempt_result {
+            Ok((parts, _)) => {
+                cleanup_parts(&parts);
+                break;
+            }
+            Err((e, parts, _)) => {
+                cleanup_parts(&parts);
+                let failover = e.starts_with(FAILOVER_TAG);
+                let visible = untag_failover(&e).to_string();
+                if failover && idx + 1 < sessions.len() {
+                    eprintln!(
+                        "FAILOVER: {} hit upload limit ({}). switching to {} and re-uploading…",
+                        session.display_name(),
+                        visible,
+                        sessions[idx + 1].display_name()
+                    );
+                    continue;
+                }
+                final_error = Some(visible);
+                break;
+            }
         }
+    }
+
+    if let Some(e) = final_error {
+        return Err(e);
     }
 
     // 清理自动截取的临时封面图 / Clean up temporary auto-extracted cover image
@@ -3644,7 +3911,6 @@ fn run() -> Result<(), String> {
         println!("DELETE_INPUT");
     }
 
-    cleanup_session_copy(api_id, mode);
     Ok(())
 }
 
@@ -3684,6 +3950,7 @@ fn main() {
             std::process::exit(1);
         }
         let proxy = param("proxy", "");
+        let label = param("session_label", "");
         let id: i32 = match api_id.parse() {
             Ok(n) => n,
             Err(_) => {
@@ -3691,7 +3958,7 @@ fn main() {
                 std::process::exit(1);
             }
         };
-        if let Err(e) = run_refresh(id, &proxy) {
+        if let Err(e) = run_refresh(id, &proxy, &label) {
             eprintln!("{}", e);
             std::process::exit(1);
         }
@@ -4095,5 +4362,59 @@ mod tests {
         assert!(err.contains("nothing to send"), "unexpected message: {}", err);
         // 纯文字 / text only
         assert!(validate_payload_flags(false, true, false).is_ok());
+    }
+
+    #[test]
+    fn session_labels_are_sanitised_and_deduplicated() {
+        assert_eq!(sanitize_session_label(" Backup-1 "), "backup-1");
+        assert_eq!(sanitize_session_label("../etc/passwd"), "etc_passwd");
+        assert_eq!(sanitize_session_label("***"), "");
+        assert_eq!(
+            user_session_path(42, ""),
+            config_dir_path().join("42_user.db")
+        );
+        assert_eq!(
+            user_session_path(42, "backup1"),
+            config_dir_path().join("42_user_backup1.db")
+        );
+        assert_eq!(
+            parse_fallback_labels(" backup1, Backup-1 ; backup2\nbackup1,, "),
+            vec!["backup1".to_string(), "backup-1".to_string(), "backup2".to_string()]
+        );
+    }
+
+    #[test]
+    fn flood_errors_are_tagged_for_failover() {
+        assert!(is_flood_error("upload failed: FLOOD_PREMIUM_WAIT_X"));
+        assert!(is_flood_error("FLOOD_WAIT_42"));
+        assert!(!is_flood_error("CHANNEL_INVALID"));
+
+        let tagged = tag_flood_error("save part failed: FLOOD_WAIT_30".to_string());
+        assert!(tagged.starts_with(FAILOVER_TAG));
+        assert_eq!(untag_failover(&tagged), "save part failed: FLOOD_WAIT_30");
+        assert_eq!(
+            tag_flood_error("CHANNEL_INVALID".to_string()),
+            "CHANNEL_INVALID"
+        );
+        // 已经打过标记的错误不能重复加前缀 / Never stack the internal marker
+        assert_eq!(tag_flood_error(tagged.clone()), tagged);
+    }
+
+    #[test]
+    fn describe_declares_multi_session_params() {
+        let v: serde_json::Value = serde_json::from_str(DESCRIBE).expect("DESCRIBE is valid JSON");
+        let params = v["params"].as_array().expect("params is an array");
+        let label = params
+            .iter()
+            .find(|p| p["key"] == "session_label")
+            .expect("session_label is declared");
+        assert_eq!(label["type"], "string");
+        assert_eq!(label["default"], "");
+        let fallback = params
+            .iter()
+            .find(|p| p["key"] == "fallback_sessions")
+            .expect("fallback_sessions is declared");
+        assert_eq!(fallback["type"], "string");
+        assert_eq!(fallback["default"], "");
     }
 }

@@ -150,12 +150,13 @@ pub fn send_defaults(state: &AppState) -> SendDefaults {
     };
     let api_id = param_str(&params, "api_id");
     let bot_token = param_str(&params, "bot_token");
+    let session_label = param_str(&params, "session_label");
     // 与模块自身的判定保持一致：auto 时有已登录的用户会话就算有账号
     // Match the module's own rule: with `auto`, a signed-in user session counts as an account
     let has_user_session = api_id
         .trim()
         .parse::<i32>()
-        .map(user_session_exists)
+        .map(|id| user_session_exists(id, &session_label))
         .unwrap_or(false);
     let has_bot = !bot_token.trim().is_empty();
     let has_account = match account.as_str() {
@@ -193,11 +194,34 @@ fn telegram_config_dir() -> Option<std::path::PathBuf> {
     dirs::config_dir().map(|d| d.join("notify_telegram"))
 }
 
-/// 判断指定 api_id 是否已有已登录的用户会话文件。
-/// Whether a signed-in user session file exists for the given api_id.
-pub fn user_session_exists(api_id: i32) -> bool {
+/// 把会话标签规范化成安全文件名片段（与 notify_telegram 模块保持一致）。
+/// Sanitize a session label into a safe filename fragment (mirrors the module).
+fn sanitize_session_label(raw: &str) -> String {
+    raw.trim()
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                c.to_ascii_lowercase()
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>()
+        .trim_matches('_')
+        .to_string()
+}
+
+/// 判断指定 api_id + 标签是否已有已登录的用户会话文件。
+/// Whether a signed-in user session file exists for the given api_id and label.
+pub fn user_session_exists(api_id: i32, label: &str) -> bool {
+    let clean = sanitize_session_label(label);
+    let file_name = if clean.is_empty() {
+        format!("{}_user.db", api_id)
+    } else {
+        format!("{}_user_{}.db", api_id, clean)
+    };
     telegram_config_dir()
-        .map(|d| d.join(format!("{}_user.db", api_id)).is_file())
+        .map(|d| d.join(file_name).is_file())
         .unwrap_or(false)
 }
 
@@ -713,7 +737,12 @@ mod tests {
 /// No phone number / code is needed (the session must already be authorized).
 ///
 /// 返回 (success, stdout, stderr) / Returns (success, stdout, stderr).
-pub fn run_refresh(exe: &std::path::Path, api_id: &str, proxy: &str) -> (bool, String, String) {
+pub fn run_refresh(
+    exe: &std::path::Path,
+    api_id: &str,
+    proxy: &str,
+    session_label: &str,
+) -> (bool, String, String) {
     use std::io::{BufRead, BufReader};
     use std::process::{Command, Stdio};
 
@@ -727,6 +756,9 @@ pub fn run_refresh(exe: &std::path::Path, api_id: &str, proxy: &str) -> (bool, S
     if !proxy.is_empty() {
         cmd.env("PP_PROXY", proxy);
         cmd.env("PP_PARAM_PROXY", proxy);
+    }
+    if !session_label.is_empty() {
+        cmd.env("PP_PARAM_SESSION_LABEL", session_label);
     }
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
