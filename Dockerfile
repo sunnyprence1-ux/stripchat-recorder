@@ -148,7 +148,7 @@ RUN printf '%s\n' \
     'exec /app/stripchat-recorder/stripchat-recorder "$@"' \
     > /entrypoint.sh && chmod +x /entrypoint.sh
 
-VOLUME ["/app/stripchat-recorder/logs", "/app/stripchat-recorder/recordings", "/app/stripchat-recorder/modules", "/app/stripchat-recorder/config"]
+# Persistent storage: attach a Railway Volume at /app/stripchat-recorder/recordings (or a parent directory)
 
 EXPOSE ${PORT:-3030}
 
