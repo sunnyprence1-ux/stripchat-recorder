@@ -181,7 +181,7 @@ const DESCRIBE: &str = r#"{
         },
         {
         "key": "upload_workers",
-        "label": "每个视频的并发上传分块数（默认 16，上限 16；0 = 默认）。高延迟代理/WARP 不要低于 8；每个 512KB 分块并发传输",
+        "label": "每个视频的并发上传分块数（默认 16，上限 16；0 = 默认）。WZGram 实际最多使用 8 个会话：Telegram 非 Premium 账号速率过高会触发 FLOOD_PREMIUM_WAIT_X，降低并发反而更快",
         "type": "number",
         "default": 16
         },
@@ -2067,10 +2067,10 @@ async fn upload_via_wzgram(
         }
     });
     // WZGram opens its own media-session pool; one session carries two part
-    // workers. The default upload_workers=16 therefore maps to 12 sessions,
-    // which matches WZGram's own non-Premium default and keeps enough parts in
-    // flight to hide WARP/Telegram round-trip latency.
-    let pool = workers.clamp(4, 12);
+    // workers. More sessions only create more requests that get the same
+    // FLOOD_PREMIUM_WAIT_X on a throttled non-Premium account, so cap the pool
+    // at 8 while keeping enough parallelism to hide WARP round-trip latency.
+    let pool = workers.clamp(4, 8);
 
     let mut child = tokio::process::Command::new(&configured_python)
         .arg(&script)

@@ -218,21 +218,15 @@ async def _run() -> None:
     api_id = int(os.environ["TG_API_ID"])
     session_path = os.environ["TG_SESSION_PATH"]
     proxy = os.environ.get("TG_PROXY", "").strip() or None
-    # Match WZGram's non-Premium default of 12 media sessions. Each session has
-    # two part workers, so 12 sessions keep up to 24 x 512 KiB parts in flight —
-    # exactly what Telegram recommends for a high-latency/WARP uplink.
-    pool = max(4, min(16, int(os.environ.get("TG_WZGRAM_POOL", "12"))))
-    rate = max(64, int(os.environ.get("TG_WZGRAM_RATE", "1000")))
-    print(f"WZ_INFO:pool={pool} rate={rate}", flush=True)
-
-    # save_file reads these at call time. A high rate removes WZGram's default
-    # 32-parts/s pacing for non-premium accounts; the VPS uplink remains the cap.
-    os.environ["WZGRAM_UPLOAD_RATE_USER"] = str(rate)
-    os.environ["WZGRAM_UPLOAD_RATE_BOT"] = str(rate)
-    os.environ["WZGRAM_UPLOAD_RATE_PREMIUM"] = str(rate)
+    # Fewer media sessions means fewer simultaneous part requests. Telegram
+    # speed-limits non-Premium accounts after tens of GB of transfers and answers
+    # every excess upload.SaveBigFilePart with FLOOD_PREMIUM_WAIT_X; 12 sessions
+    # only create 24 requests that each have to wait 13-16 seconds.
+    pool = max(4, min(8, int(os.environ.get("TG_WZGRAM_POOL", "8"))))
     os.environ["WZGRAM_UPLOAD_POOL_USER"] = str(pool)
     os.environ["WZGRAM_UPLOAD_POOL_BOT"] = str(pool)
     os.environ["WZGRAM_UPLOAD_POOL_PREMIUM"] = str(pool)
+    print(f"WZ_INFO:pool={pool}", flush=True)
 
     try:
         import uvloop
@@ -243,8 +237,21 @@ async def _run() -> None:
     from wzgram import Client, raw
     from wzgram.methods.advanced import save_file as _save_file_mod
     from wzgram.session import Session
+    from pyrogram.methods.rate_limiter import AdaptiveBucket as _AdaptiveBucket
 
     _install_safe_stop_workers(_save_file_mod, Session.MEDIA_WAIT_TIMEOUT)
+
+    # WZGram sets the adaptive pacer's ceiling to max(rate, 300), so even a low
+    # starting rate eventually ramps into flood territory on a long upload.
+    # Cap it for non-Premium accounts; the pacer still backs off on flood waits.
+    class _CappedAdaptiveBucket(_AdaptiveBucket):
+        def __init__(self, rate, ceiling, *args, **kwargs):
+            cap = int(os.environ.get("TG_WZGRAM_RATE_CAP", "0"))
+            if cap > 0:
+                ceiling = min(ceiling, cap)
+            super().__init__(rate, ceiling, *args, **kwargs)
+
+    _save_file_mod.AdaptiveBucket = _CappedAdaptiveBucket
 
     dc_id, auth_key, host, port = _read_grammers_session(session_path)
     session_string = _session_string(dc_id, api_id, auth_key, host, port)
@@ -260,7 +267,7 @@ async def _run() -> None:
         no_updates=True,
         skip_updates=True,
         timeout=60,
-        sleep_threshold=0,
+        sleep_threshold=10,
         # save_file opens its own media session pool; this semaphore only gates
         # concurrent save_file() calls, so match the pool instead of leaving the
         # default cap of 1.
@@ -289,6 +296,29 @@ async def _run() -> None:
         client.me = me
         await client.storage.user_id(me.id)
         await client.storage.is_bot(bool(me.is_bot))
+
+        # WZGram reads these limits when save_file() is called, so decide after
+        # get_me(). Never force a 1000 parts/s rate: that disables the adaptive
+        # pacer and makes every part hit a 13-16 second FLOOD_PREMIUM_WAIT_X on
+        # a non-Premium account. Start low and let the pacer ramp up by 1 part/s
+        # while parts succeed, backing off 15% whenever Telegram complains.
+        is_premium = bool(getattr(me, "is_premium", False))
+        override_rate = os.environ.get("TG_WZGRAM_RATE", "").strip()
+        rate = int(override_rate) if override_rate else (300 if is_premium else 4)
+        rate = max(1, rate)
+        os.environ["WZGRAM_UPLOAD_RATE_USER"] = str(rate)
+        os.environ["WZGRAM_UPLOAD_RATE_BOT"] = str(rate)
+        os.environ["WZGRAM_UPLOAD_RATE_PREMIUM"] = str(rate if is_premium else 300)
+        os.environ["TG_WZGRAM_RATE_CAP"] = "300" if is_premium else "16"
+        # Keep the initial burst small; with the old burst of 16, a throttled
+        # account received a flood wait before the pacer even started.
+        _save_file_mod.PACER_BURST = 4 if is_premium else 2
+        print(
+            f"WZ_INFO:premium={int(is_premium)} rate={rate} "
+            f"cap={os.environ['TG_WZGRAM_RATE_CAP']}",
+            flush=True,
+        )
+
         await client.invoke(raw.functions.updates.GetState())
         await client.initialize()
 
