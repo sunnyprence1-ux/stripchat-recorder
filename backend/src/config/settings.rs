@@ -593,9 +593,20 @@ impl AppState {
             fs::read_to_string(config_dir.join(name)).ok()
         };
 
-        let settings: Settings = load_json("settings.json")
+        let mut settings: Settings = load_json("settings.json")
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default();
+
+        // Railway 挂载数据目录时 settings.json 可能不存在；直接从环境变量读取语言，
+        // 不依赖 entrypoint 去改写文件。
+        // When a Railway volume replaces the config directory, settings.json may not
+        // exist yet. Apply LANGUAGE directly instead of relying on entrypoint sed.
+        if let Ok(language) = std::env::var("LANGUAGE") {
+            let language = language.trim();
+            if !language.is_empty() {
+                settings.language = language.to_string();
+            }
+        }
         let streamers: Vec<StreamerData> = load_json("streamers.json")
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default();
