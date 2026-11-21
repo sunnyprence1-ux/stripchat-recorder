@@ -1612,6 +1612,7 @@ async fn set_anonymous_group_sender(client: &Client, peer: &PeerRef) -> Result<(
             send_as: (*peer).into(),
         })
         .await
+        .map(|_| ())
         .map_err(|e| format!(
             "could not enable anonymous posting for this user account (Telegram messages.saveDefaultSendAs failed: {}); verify this account is an anonymous admin in the group",
             e
