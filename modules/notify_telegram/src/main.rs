@@ -1601,6 +1601,23 @@ async fn resolve_target(
     Ok(Target { peer: build_peer_ref(chat_id), kind: ChatKind::Unknown, title: None })
 }
 
+/// Make Telegram use this supergroup as the sender for subsequent messages from this account.
+/// This is the MTProto equivalent of selecting “Send anonymously” in Telegram's composer.
+/// The default is stored per account and chat, so this also covers grammers' high-level media
+/// helpers, which currently send with `send_as: None`.
+async fn set_anonymous_group_sender(client: &Client, peer: &PeerRef) -> Result<(), String> {
+    client
+        .invoke(&tl::functions::messages::SaveDefaultSendAs {
+            peer: (*peer).into(),
+            send_as: (*peer).into(),
+        })
+        .await
+        .map_err(|e| format!(
+            "could not enable anonymous posting for this user account (Telegram messages.saveDefaultSendAs failed: {}); verify this account is an anonymous admin in the group",
+            e
+        ))
+}
+
 /// 计算字符串的 UTF-16 编码长度（Telegram 消息实体使用 UTF-16 偏移量）。
 /// Calculate the UTF-16 encoded length of a string (Telegram message entities use UTF-16 offsets).
 fn utf16_len(s: &str) -> usize { s.encode_utf16().count() }
@@ -2634,6 +2651,15 @@ async fn upload_and_send(
 
     let target = resolve_target(client, chat_id, username).await?;
     let peer = target.peer;
+    if session.mode == SessionMode::User
+        && matches!(target.kind, ChatKind::Supergroup { .. })
+    {
+        // Each failover account has its own saved Send As preference. Apply it on the
+        // account actually uploading this file so covers, captions and albums all appear
+        // under the group identity, just like Telegram's “Send anonymously” composer mode.
+        set_anonymous_group_sender(client, &peer).await?;
+        eprintln!("Telegram sender set to anonymous group identity ({})", target.describe());
+    }
 
     // 处理封面图：非 jpg/png 格式需先用 ffmpeg 转换，然后检查尺寸限制
     // Handle cover image: non-jpg/png formats need ffmpeg conversion first, then check dimension limits
@@ -3269,6 +3295,12 @@ async fn self_test(cfg: &TgConfig) -> Result<(), String> {
     // Show what Telegram thinks this chat is: group vs channel, topics on or off
     println!("[2/5] target chat resolved: {}", target.describe());
     let peer = target.peer;
+    if session.mode == SessionMode::User
+        && matches!(target.kind, ChatKind::Supergroup { .. })
+    {
+        set_anonymous_group_sender(&client, &peer).await?;
+        println!("      anonymous group sender enabled for this user session");
+    }
 
     // 话题失败在自检中视为失败（正常发送时会退化为普通消息，但自检需要暴露问题）
     // A topic failure is fatal in the self-test (normal runs fall back to a plain message,
