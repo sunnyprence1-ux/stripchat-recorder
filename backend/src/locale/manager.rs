@@ -56,10 +56,6 @@ pub fn module_locale_dir(module_id: &str) -> PathBuf {
     modules_locale_dir().join(module_id)
 }
 
-/// 默认的主程序中文翻译 JSON。
-/// Default app Chinese (zh-CN) translation JSON.
-const APP_ZH_CN: &str = include_str!("defaults/app/zh-CN.json");
-
 /// 默认的主程序英文翻译 JSON。
 /// Default app English (en-US) translation JSON.
 const APP_EN_US: &str = include_str!("defaults/app/en-US.json");
@@ -69,18 +65,8 @@ const APP_EN_US: &str = include_str!("defaults/app/en-US.json");
 const MODULE_DEFAULTS: &[(&str, &str, &str)] = &[
     (
         "filter_short",
-        "zh-CN",
-        include_str!("defaults/modules/filter_short/zh-CN.json"),
-    ),
-    (
-        "filter_short",
         "en-US",
         include_str!("defaults/modules/filter_short/en-US.json"),
-    ),
-    (
-        "notify_discord",
-        "zh-CN",
-        include_str!("defaults/modules/notify_discord/zh-CN.json"),
     ),
     (
         "notify_discord",
@@ -89,18 +75,8 @@ const MODULE_DEFAULTS: &[(&str, &str, &str)] = &[
     ),
     (
         "notify_telegram",
-        "zh-CN",
-        include_str!("defaults/modules/notify_telegram/zh-CN.json"),
-    ),
-    (
-        "notify_telegram",
         "en-US",
         include_str!("defaults/modules/notify_telegram/en-US.json"),
-    ),
-    (
-        "upload_gdrive",
-        "zh-CN",
-        include_str!("defaults/modules/upload_gdrive/zh-CN.json"),
     ),
     (
         "upload_gdrive",
@@ -129,7 +105,7 @@ pub fn init_locale_dirs() {
 
     // 主程序内置语言文件：不存在则创建，存在但校验失败则重建
     // Built-in app locale files: create if missing, rebuild if validation fails
-    for (locale_code, default_content) in [("zh-CN", APP_ZH_CN), ("en-US", APP_EN_US)] {
+    for (locale_code, default_content) in [("en-US", APP_EN_US)] {
         let path = app_dir.join(format!("{}.json", locale_code));
         write_or_rebuild_if_invalid(
             &path,
@@ -393,10 +369,10 @@ fn validate_file_at_path(
             let code = path
                 .file_stem()
                 .and_then(|s| s.to_str())
-                .unwrap_or("zh-CN");
+                .unwrap_or("en-US");
             let default_content = match code {
                 "en-US" => APP_EN_US,
-                _ => APP_ZH_CN,
+                _ => APP_EN_US,
             };
             validate_app_locale(&value, default_content)
         }
@@ -414,7 +390,7 @@ pub fn check_custom_locale_files() -> Vec<(String, String)> {
     let mut warnings: Vec<(String, String)> = Vec::new();
 
     // 检查 app 自定义语言文件 / Check custom app locale files
-    let builtin_app_codes: &[&str] = &["zh-CN", "en-US"];
+    let builtin_app_codes: &[&str] = &["en-US"];
     if let Ok(dir) = std::fs::read_dir(app_locale_dir()) {
         for entry in dir.flatten() {
             let path = entry.path();
@@ -441,7 +417,7 @@ pub fn check_custom_locale_files() -> Vec<(String, String)> {
         "notify_telegram",
         "upload_gdrive",
     ];
-    let builtin_locale_codes: &[&str] = &["zh-CN", "en-US"];
+    let builtin_locale_codes: &[&str] = &["en-US"];
     if let Ok(mod_dir) = std::fs::read_dir(modules_locale_dir()) {
         for module_entry in mod_dir.flatten() {
             let module_path = module_entry.path();
@@ -500,10 +476,7 @@ pub fn read_app_locale(locale_code: &str) -> serde_json::Value {
     let path = app_locale_dir().join(format!("{}.json", locale_code));
     read_locale_file(&path).unwrap_or_else(|| {
         // 内置 fallback / Embedded fallback
-        let content = match locale_code {
-            "en-US" => APP_EN_US,
-            _ => APP_ZH_CN,
-        };
+        let content = APP_EN_US;
         serde_json::from_str(content).unwrap_or(serde_json::Value::Object(Default::default()))
     })
 }
@@ -612,45 +585,10 @@ pub struct LocaleEntry {
 /// Scan the locale/app/ directory and return all available locales.
 /// Always includes built-in zh-CN and en-US (even if files don't exist yet).
 pub fn list_available_locales() -> Vec<LocaleEntry> {
-    let mut entries: Vec<LocaleEntry> = Vec::new();
-    let mut seen = std::collections::HashSet::new();
-
-    // 先扫描磁盘上的文件 / Scan files on disk first
-    if let Ok(dir) = std::fs::read_dir(app_locale_dir()) {
-        let mut paths: Vec<_> = dir.flatten().collect();
-        paths.sort_by_key(|e| e.file_name());
-        for entry in paths {
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("json") {
-                continue;
-            }
-            let code = match path.file_stem().and_then(|s| s.to_str()) {
-                Some(s) => s.to_string(),
-                None => continue,
-            };
-            if seen.contains(&code) {
-                continue;
-            }
-            let name = read_locale_file(&path)
-                .and_then(|v| v.get("languageName").and_then(|n| n.as_str()).map(|s| s.to_string()))
-                .unwrap_or_else(|| code.clone());
-            seen.insert(code.clone());
-            entries.push(LocaleEntry { code, name });
-        }
-    }
-
-    // 补充内置语言（若磁盘上没有）/ Add built-in locales if not already present
-    for (code, content) in [("zh-CN", APP_ZH_CN), ("en-US", APP_EN_US)] {
-        if !seen.contains(code) {
-            let name = serde_json::from_str::<serde_json::Value>(content)
-                .ok()
-                .and_then(|v| v.get("languageName").and_then(|n| n.as_str()).map(|s| s.to_string()))
-                .unwrap_or_else(|| code.to_string());
-            entries.push(LocaleEntry { code: code.to_string(), name });
-        }
-    }
-
-    entries
+    vec![LocaleEntry {
+        code: "en-US".to_string(),
+        name: "English".to_string(),
+    }]
 }
 
 #[cfg(test)]

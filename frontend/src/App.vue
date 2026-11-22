@@ -29,7 +29,6 @@
 	import { useScrollbar } from "@/composables/useScrollbar";
 	import { loadLocaleFromServer } from "@/i18n";
 	import { useModuleLocaleStore } from "@/stores/moduleLocale";
-	import { useLocalesStore } from "@/stores/locales";
 
 	const router = useRouter();
 	const route = useRoute();
@@ -37,7 +36,6 @@
 	const streamersStore = useStreamersStore();
 	const { t, locale } = useI18n();
 	const moduleLocaleStore = useModuleLocaleStore();
-	const localesStore = useLocalesStore();
 
 	const mainScrollEl = ref<HTMLElement | null>(null);
 	useScrollbar(mainScrollEl);
@@ -132,29 +130,9 @@
 		applyTheme(mq.matches);
 		mq.addEventListener("change", onThemeChange);
 
-		// 从后端同步语言设置，先加载消息再切换 locale
-		// Sync language from backend, load messages before switching locale
-		try {
-			const settings = await call<{ language?: string }>("get_settings");
-			if (settings?.language) {
-				// 先加载该语言的消息，再切换 locale，保证首屏就用正确语言渲染
-				// Load messages for the language first, then switch locale,
-				// so the first render already uses the correct language
-				const { modules: moduleLocales } = await loadLocaleFromServer(settings.language);
-				locale.value = settings.language;
-				moduleLocaleStore.setLocales(settings.language, moduleLocales);
-			} else {
-				// 无自定义语言，仍加载默认 locale 的服务器覆盖（模块翻译等）
-				// No custom language, still load server overrides for the default locale
-				const { modules: moduleLocales } = await loadLocaleFromServer(locale.value);
-				moduleLocaleStore.setLocales(locale.value, moduleLocales);
-			}
-		} catch {
-			// 后端未就绪时加载当前 locale 的消息作为 fallback
-			// Backend not ready: load current locale messages as fallback
-			const { modules: moduleLocales } = await loadLocaleFromServer(locale.value);
-			moduleLocaleStore.setLocales(locale.value, moduleLocales);
-		}
+		const { modules: moduleLocales } = await loadLocaleFromServer("en-US");
+		locale.value = "en-US";
+		moduleLocaleStore.setLocales("en-US", moduleLocales);
 
 		// 监听 ffmpeg 缺失警告 / Listen for ffmpeg missing warning
 		unlistenFfmpeg = await on("ffmpeg-missing", (payload) => {
@@ -206,11 +184,6 @@
 			},
 		);
 
-		// 初始加载可用语言列表 / Initial load of available locales
-		await localesStore.refresh();
-
-		// locale-files-changed 事件已在 localesStore 内部监听，无需在此重复注册
-		// locale-files-changed is already listened inside localesStore; no need to register here
 	});
 
 	onUnmounted(() => {
@@ -240,25 +213,23 @@
 
 		<!-- 正常布局：侧边栏（≥md）+ 内容区 + 移动端底部标签栏
 		     Normal layout: sidebar (≥md) + content + mobile bottom tab bar -->
-		<div v-else key="main" class="flex app-shell-height overflow-hidden">
+		<div v-else key="main" class="flex app-shell-height overflow-hidden app-frame">
 			<!-- 桌面端侧边栏，移动端隐藏 / Desktop sidebar, hidden on mobile -->
 			<aside
-				class="hidden md:flex w-44 shrink-0 bg-sidebar border-r border-sidebar-border flex-col p-3 gap-1"
+				class="hidden md:flex w-60 shrink-0 bg-sidebar border-r border-sidebar-border flex-col p-4 gap-2"
 			>
 				<div
-					class="flex items-center gap-2 px-1 py-4 mb-1 border-b border-sidebar-border"
+					class="flex items-center gap-3 px-2 py-5 mb-3 border-b border-sidebar-border"
 				>
-					<span class="w-2.5 h-2.5 rounded-full bg-destructive shrink-0" />
-					<span class="text-sm font-bold text-sidebar-foreground"
-						>StripchatRecorder</span
-					>
+					<span class="w-8 h-8 rounded-xl bg-primary text-primary-foreground grid place-items-center text-xs font-black shrink-0">SR</span>
+					<span class="text-sm font-bold tracking-tight text-sidebar-foreground">Stripchat<br><span class="text-[10px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Control room</span></span>
 				</div>
 				<nav class="flex flex-col gap-0.5">
 					<Button
 						v-for="item in navItems"
 						:key="item.to"
 						variant="ghost"
-						class="w-full justify-start text-sm font-normal"
+						class="w-full h-10 justify-start rounded-xl px-3 text-sm font-medium"
 						:class="
 							route.path === item.to
 								? 'bg-sidebar-accent text-sidebar-accent-foreground font-semibold'
@@ -269,13 +240,17 @@
 						{{ t(item.labelKey) }}
 					</Button>
 				</nav>
+				<div class="mt-auto rounded-xl border border-sidebar-border bg-background/70 px-3 py-3 text-[11px] text-muted-foreground">
+					<div class="flex items-center gap-2 font-semibold text-sidebar-foreground"><span class="size-1.5 rounded-full bg-emerald-500" /> RECORDER READY</div>
+					<div class="mt-1">English control surface</div>
+				</div>
 			</aside>
 			<main class="flex-1 min-w-0 overflow-hidden">
 				<!-- 底部留出标签栏 + 安全区高度，避免内容被遮挡
 				     Bottom padding leaves room for the tab bar + safe area -->
 				<div
 					ref="mainScrollEl"
-					class="h-full overflow-y-scroll overflow-x-hidden p-4 md:p-6 pb-[calc(4.5rem+env(safe-area-inset-bottom))] md:pb-6 scrollbar-overlay"
+					class="h-full overflow-y-auto overflow-x-hidden p-4 md:p-8 pb-[calc(4.5rem+env(safe-area-inset-bottom))] md:pb-8 scrollbar-overlay workspace-surface"
 				>
 					<RouterView v-slot="{ Component }">
 						<Transition name="page" mode="out-in">
@@ -287,7 +262,7 @@
 
 			<!-- 移动端底部标签栏（<md），固定在安全区之上 / Mobile bottom tab bar (<md), above the safe area -->
 			<nav
-				class="md:hidden fixed inset-x-0 bottom-0 z-40 border-t border-border bg-sidebar/95 backdrop-blur-sm"
+				class="md:hidden fixed inset-x-0 bottom-0 z-40 border-t border-border bg-sidebar"
 				:style="{
 					paddingBottom: 'env(safe-area-inset-bottom)',
 					paddingLeft: 'env(safe-area-inset-left)',

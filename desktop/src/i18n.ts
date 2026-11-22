@@ -7,12 +7,11 @@
 
 import { createI18n } from "vue-i18n";
 import { invoke } from "@tauri-apps/api/core";
-import zhCN from "./locales/zh-CN";
 import enUS from "./locales/en-US";
 
-export type MessageSchema = typeof zhCN;
+export type MessageSchema = typeof enUS;
 
-const savedLocale = "zh-CN";
+const savedLocale = "en-US";
 
 /** 可用语言条目 / Available locale entry */
 export interface LocaleEntry {
@@ -35,10 +34,7 @@ export async function fetchAvailableLocales(): Promise<LocaleEntry[]> {
 }
 
 function builtinLocales(): LocaleEntry[] {
-	return [
-		{ code: "zh-CN", name: "简体中文" },
-		{ code: "en-US", name: "English" },
-	];
+	return [{ code: "en-US", name: "English" }];
 }
 
 export interface LoadLocaleResult {
@@ -78,9 +74,8 @@ export async function loadLocaleFromServer(
 const i18n = createI18n<false>({
 	legacy: false,
 	locale: savedLocale,
-	fallbackLocale: "zh-CN",
+	fallbackLocale: "en-US",
 	messages: {
-		"zh-CN": zhCN,
 		"en-US": enUS,
 	},
 });

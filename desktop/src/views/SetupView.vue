@@ -21,19 +21,13 @@ import { useSettingsStore } from "@/stores/settings";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
-import { loadLocaleFromServer } from "@/i18n";
-import { useModuleLocaleStore } from "@/stores/moduleLocale";
-import { useLocalesStore } from "@/stores/locales";
 
 const router = useRouter();
-const { t, locale } = useI18n();
+const { t } = useI18n();
 const store = useSettingsStore();
-const moduleLocaleStore = useModuleLocaleStore();
-const localesStore = useLocalesStore();
 
 // ── 步骤控制 / Step control ──────────────────────────────────────────────────
-const TOTAL_STEPS = 3;
+const TOTAL_STEPS = 2;
 const step = ref(1);
 const saving = ref(false);
 const error = ref("");
@@ -42,7 +36,6 @@ const error = ref("");
 const stepTransition = ref("step-forward");
 
 // ── 表单字段 / Form fields ───────────────────────────────────────────────────
-const language = ref("zh-CN");
 const outputDir = ref("");
 const apiProxy = ref("");
 const scMirror = ref("");
@@ -58,36 +51,17 @@ onMounted(async () => {
 	// 确保语言列表已加载；若已加载则 refresh() 内部会快速返回已有结果。
 	// App.vue may not have finished its onMounted yet (e.g. first-launch routing to /setup).
 	// Ensure the locale list is loaded; if already loaded, refresh() returns quickly.
-	if (!localesStore.loaded) {
-		await localesStore.refresh();
-	}
 	await store.fetchSettings();
 	const s = store.settings;
-	language.value = s.language || "zh-CN";
-	locale.value = language.value;
 	outputDir.value = s.output_dir || "";
 	apiProxy.value = s.api_proxy_url || "";
 	scMirror.value = s.sc_mirror_url || "";
 	cdnProxy.value = s.cdn_proxy_url || "";
 });
 
-// ── 语言切换 / Language switch ───────────────────────────────────────────────
-async function setLanguage(lang: string) {
-	language.value = lang;
-	// 先加载消息，再切换 locale，避免 vue-i18n 在消息就绪前以 fallback 语言渲染
-	// Load messages first, then switch locale to avoid vue-i18n rendering with fallback
-	const { modules: moduleLocales, warning } = await loadLocaleFromServer(lang);
-	locale.value = lang;
-	moduleLocaleStore.setLocales(lang, moduleLocales);
-	if (warning) {
-		// SetupView 没有 toast，用 error ref 展示
-		error.value = t("settings.localeFileInvalid", { file: `${lang}.json` }) + ": " + warning;
-	}
-}
-
 // ── 步骤校验 / Step validation ───────────────────────────────────────────────
 const canNext = computed(() => {
-	if (step.value === 2) return outputDir.value.trim().length > 0;
+	if (step.value === 1) return outputDir.value.trim().length > 0;
 	return true;
 });
 
@@ -112,7 +86,7 @@ async function finish() {
 	if (!outputDir.value.trim()) {
 		error.value = t("setup.outputDirRequired");
 		stepTransition.value = "step-back";
-		step.value = 2;
+		step.value = 1;
 		return;
 	}
 	saving.value = true;
@@ -120,7 +94,7 @@ async function finish() {
 	try {
 		await store.saveSettings({
 			...store.settings,
-			language: language.value,
+			language: "en-US",
 			output_dir: outputDir.value.trim(),
 			api_proxy_url: apiProxy.value.trim() || null,
 			sc_mirror_url: scMirror.value.trim() || null,
@@ -181,31 +155,8 @@ async function finish() {
 				<Transition :name="stepTransition" mode="out-in">
 					<div :key="step" class="flex flex-col gap-6">
 
-						<!-- Step 1: 语言 / Language -->
+						<!-- Step 1: output directory -->
 						<template v-if="step === 1">
-							<div class="flex flex-col gap-1.5">
-								<h2 class="text-base font-semibold">{{ t("setup.step1.title") }}</h2>
-								<p class="text-sm text-muted-foreground">{{ t("setup.step1.desc") }}</p>
-							</div>
-							<RadioGroup
-								:model-value="language"
-								class="flex flex-col gap-3"
-								@update:model-value="(v) => v && setLanguage(String(v))"
-							>
-								<label
-									v-for="loc in localesStore.locales"
-									:key="loc.code"
-									class="flex items-center gap-3 rounded-lg border p-4 cursor-pointer transition-colors"
-									:class="language === loc.code ? 'border-primary bg-primary/5' : 'border-border hover:border-primary/50'"
-								>
-									<RadioGroupItem :value="loc.code" />
-									<span class="font-medium">{{ loc.name }}</span>
-								</label>
-							</RadioGroup>
-						</template>
-
-						<!-- Step 2: 输出目录 / Output directory -->
-						<template v-if="step === 2">
 							<div class="flex flex-col gap-1.5">
 								<h2 class="text-base font-semibold">{{ t("setup.step2.title") }}</h2>
 								<p class="text-sm text-muted-foreground">{{ t("setup.step2.desc") }}</p>
@@ -222,8 +173,8 @@ async function finish() {
 							</div>
 						</template>
 
-						<!-- Step 3: 网络代理（可选）/ Network proxies (optional) -->
-						<template v-if="step === 3">
+						<!-- Step 2: Network proxies (optional) -->
+						<template v-if="step === 2">
 							<div class="flex flex-col gap-1.5">
 								<h2 class="text-base font-semibold">{{ t("setup.step3.title") }}</h2>
 								<p class="text-sm text-muted-foreground">{{ t("setup.step3.desc") }}</p>
@@ -258,9 +209,6 @@ async function finish() {
 				</Button>
 
 				<div class="flex items-center gap-3">
-					<Button v-if="step === 3" variant="ghost" :disabled="saving" @click="finish">
-						{{ t("setup.skip") }}
-					</Button>
 					<Button v-if="step < TOTAL_STEPS" :disabled="!canNext" @click="next">
 						{{ t("setup.next") }}
 					</Button>

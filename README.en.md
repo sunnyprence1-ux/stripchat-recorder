@@ -1,6 +1,6 @@
 # StripchatRecorder
 
-[简体中文](README.md) | [English](README.en.md)
+[English](README.en.md)
 
 A self-hosted Stripchat live stream recorder with a web-based management UI. Supports automatic recording, post-processing pipelines, and multi-channel notifications.
 
@@ -52,7 +52,6 @@ services:
     restart: unless-stopped
     environment:
       - TZ=Asia/Shanghai
-      # - LANGUAGE=en-US  # Set interface language: zh-CN (default) or en-US
       # - PORT=3030        # Set server port (default: 3030)
     ports:
       - "${PORT:-3030}:${PORT:-3030}"
@@ -131,7 +130,6 @@ docker run -d \
   --name stripchat-recorder \
   --restart unless-stopped \
   -e TZ=Asia/Shanghai \
-  -e LANGUAGE=en-US \
   -e PORT=3030 \
   -p 3030:3030 \
   -v ./data/logs:/app/stripchat-recorder/logs \
@@ -295,9 +293,8 @@ export LIBCLANG_PATH=/path/to/libclang
 
 When running the binary directly, if no run mode has been configured in `config/settings.json`, an interactive TUI will guide you through setup:
 
-1. Select UI language (Chinese / English)
-2. Select run mode (Desktop / Server)
-3. If Server mode, enter the listen port (default 3030)
+1. Select run mode (Desktop / Server)
+2. If Server mode, enter the listen port (default 3030)
 
 The choices are saved to `config/settings.json` and the TUI will not appear again on subsequent launches.
 

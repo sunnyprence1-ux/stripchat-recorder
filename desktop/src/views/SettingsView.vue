@@ -45,36 +45,16 @@
 		SelectValue,
 	} from "@/components/ui/select";
 	import { useI18n } from "vue-i18n";
-	import { loadLocaleFromServer } from "@/i18n";
-	import { useModuleLocaleStore } from "@/stores/moduleLocale";
-	import { useLocalesStore } from "@/stores/locales";
 
 	const store = useSettingsStore();
 	const { toast, confirm } = useNotify();
-	const { t, locale } = useI18n();
-	const moduleLocaleStore = useModuleLocaleStore();
-	const localesStore = useLocalesStore();
+	const { t } = useI18n();
 	const resolutionDirections = ["lower", "higher"] as const;
 
 	/** 可用语言列表（从共享 store 读取，由 App.vue 统一维护）
 	 * Available locales (from shared store, maintained by App.vue) */
 	// 直接使用 store 的 ref，保持响应式；不能赋给普通变量（会丢失响应式）
 	// Use the store's ref directly to keep reactivity; assigning to a plain variable breaks it
-
-	async function setLocale(lang: string) {
-		// 先加载消息，再切换 locale，避免 vue-i18n 在消息就绪前以 fallback 语言渲染
-		// Load messages first, then switch locale to avoid vue-i18n rendering with fallback
-		const { modules: moduleLocales, warning } = await loadLocaleFromServer(lang);
-		locale.value = lang;
-		// 将语言写入 settings 持久化 / Persist language to settings
-		form.language = lang;
-		await store.saveSettings({ ...form, language: lang });
-		toast(t("settings.saved"), "success");
-		moduleLocaleStore.setLocales(lang, moduleLocales);
-		if (warning) {
-			toast(t("settings.localeFileInvalid", { file: `${lang}.json` }) + ": " + warning, "warning");
-		}
-	}
 
 	/** 表单响应式数据（与 store.settings 保持同步）/ Reactive form data (synced with store.settings) */
 	const form = reactive<Settings>({
@@ -91,7 +71,7 @@
 		preferred_resolution: 0,
 		resolution_preference: "lower",
 		max_tmp_dir_gb: 50,
-		language: "zh-CN",
+		language: "en-US",
 		mouflon_sync_url: null,
 		mouflon_sync_token: null,
 		setup_done: true,
@@ -339,31 +319,6 @@
 		<div v-if="store.loading" class="text-muted-foreground">{{ t("settings.loading") }}</div>
 
 		<form v-else class="flex flex-col gap-7">
-			<section class="flex flex-col gap-3.5">
-				<h2
-					class="text-xs font-bold uppercase tracking-widest text-muted-foreground pb-2 border-b"
-				>
-					{{ t("settings.sections.language") }}
-				</h2>
-				<div class="flex flex-col gap-1.5">
-					<Label>{{ t("settings.language.label") }}</Label>
-					<RadioGroup
-						:model-value="String(locale)"
-						class="flex flex-row gap-4"
-						@update:model-value="(v) => v && setLocale(String(v))"
-					>
-						<div
-							v-for="loc in localesStore.locales"
-							:key="loc.code"
-							class="flex items-center gap-2"
-						>
-							<RadioGroupItem :id="`lang-${loc.code}`" :value="loc.code" />
-							<Label :for="`lang-${loc.code}`" class="cursor-pointer">{{ loc.name }}</Label>
-						</div>
-					</RadioGroup>
-				</div>
-			</section>
-
 			<section class="flex flex-col gap-3.5">
 				<h2
 					class="text-xs font-bold uppercase tracking-widest text-muted-foreground pb-2 border-b"

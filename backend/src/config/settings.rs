@@ -119,7 +119,7 @@ pub struct Settings {
     /// Max size of the post-processing tmp directory in GB (0 = unlimited, default 50 GB)
     #[serde(default = "default_max_tmp_dir_gb")]
     pub max_tmp_dir_gb: f64,
-    /// 界面语言（"zh-CN" 或 "en-US"）/ UI language ("zh-CN" or "en-US")
+    /// Interface language. The application is English-only.
     #[serde(default = "default_language")]
     pub language: String,
     /// 监听端口 / Listen port
@@ -165,7 +165,7 @@ fn default_max_tmp_dir_gb() -> f64 {
 
 /// 语言的默认值 / Default value for language
 fn default_language() -> String {
-    "zh-CN".to_string()
+    "en-US".to_string()
 }
 
 /// Server 端口的默认值 / Default value for server port
@@ -597,16 +597,8 @@ impl AppState {
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default();
 
-        // Railway 挂载数据目录时 settings.json 可能不存在；直接从环境变量读取语言，
-        // 不依赖 entrypoint 去改写文件。
-        // When a Railway volume replaces the config directory, settings.json may not
-        // exist yet. Apply LANGUAGE directly instead of relying on entrypoint sed.
-        if let Ok(language) = std::env::var("LANGUAGE") {
-            let language = language.trim();
-            if !language.is_empty() {
-                settings.language = language.to_string();
-            }
-        }
+        // Locale selection was removed: normalize existing configuration files too.
+        settings.language = "en-US".to_string();
         let streamers: Vec<StreamerData> = load_json("streamers.json")
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default();
