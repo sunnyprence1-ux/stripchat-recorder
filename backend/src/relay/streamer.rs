@@ -64,15 +64,15 @@ fn find_cjk_font() -> Option<String> {
 
 fn to_ascii_status(s: &str) -> String {
     match s {
-        "公开秀" => "Public Show".to_string(),
-        "私密秀" => "Private Show".to_string(),
-        "票务秀" => "Ticket Show".to_string(),
-        "计时秀" => "Per-Minute Show".to_string(),
-        "群组秀" => "Group Show".to_string(),
-        "虚拟私密" => "Virtual Private".to_string(),
-        "等待" => "Waiting".to_string(),
-        "离线" => "Offline".to_string(),
-        "获取状态失败" => "Status Unavailable".to_string(),
+		"Public Show" | "公开秀" => "Public Show".to_string(),
+		"Private Show" | "私密秀" => "Private Show".to_string(),
+		"Ticket Show" | "票务秀" => "Ticket Show".to_string(),
+		"Per-Minute Show" | "计时秀" => "Per-Minute Show".to_string(),
+		"Group Show" | "群组秀" => "Group Show".to_string(),
+		"Virtual Private" | "虚拟私密" => "Virtual Private".to_string(),
+		"Waiting" | "等待" => "Waiting".to_string(),
+		"Offline" | "离线" => "Offline".to_string(),
+		"Status Unavailable" | "获取状态失败" => "Status Unavailable".to_string(),
         _ => s.to_string(),
     }
 }

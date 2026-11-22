@@ -116,6 +116,7 @@
   }
   body {
     @apply bg-background text-foreground;
+    font-feature-settings: "ss01" 1, "cv02" 1;
   }
   button, [role="button"], label[for], a, select,
   [data-slot="switch"], [data-slot="number-field-increment"],
@@ -170,10 +171,12 @@
 
 /* A quiet, dense control-room frame: no gradients or expensive blur filters. */
 .app-frame {
-  background: var(--background);
+  background: #0a0e16;
 }
 .workspace-surface > * {
-  max-width: 92rem;
+  max-width: 104rem;
+  margin-left: auto;
+  margin-right: auto;
 }
 .workspace-surface h1 {
   letter-spacing: -0.025em;

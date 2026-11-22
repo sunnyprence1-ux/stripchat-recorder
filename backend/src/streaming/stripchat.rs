@@ -451,17 +451,17 @@ impl StripchatApi {
         };
 
         let status = match status_text {
-            "public" => "公开秀".to_string(),
-            "private" => "私密秀".to_string(),
+            "public" => "Public Show".to_string(),
+            "private" => "Private Show".to_string(),
             "groupShow" => match group_show_type.as_deref() {
-                Some("ticket") => "票务秀".to_string(),
-                Some("perMinute") => "计时秀".to_string(),
-                _ => "群组秀".to_string(),
+                Some("ticket") => "Ticket Show".to_string(),
+                Some("perMinute") => "Per-Minute Show".to_string(),
+                _ => "Group Show".to_string(),
             },
-            "virtualPrivate" => "虚拟私密".to_string(),
+            "virtualPrivate" => "Virtual Private".to_string(),
             "p2p" => "P2P".to_string(),
-            "idle" => "等待".to_string(),
-            "off" => "离线".to_string(),
+            "idle" => "Waiting".to_string(),
+            "off" => "Offline".to_string(),
             _ => status_text.to_string(),
         };
 

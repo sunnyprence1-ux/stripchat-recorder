@@ -10,6 +10,7 @@
 -->
 <script setup lang="ts">
 	import { computed, onMounted, ref } from "vue";
+	import { Radio, CircleDotDashed, UsersRound } from "@lucide/vue";
 	import { useStreamersStore } from "../stores/streamers";
 	import type { StreamerEntry } from "../stores/streamers";
 	import { useNotify } from "../composables/useNotify";
@@ -40,6 +41,8 @@
 	const stopAllTargets = computed(() =>
 		store.streamers.filter((s) => s.is_recording),
 	);
+	const onlineCount = computed(() => store.streamers.filter((s) => s.is_online).length);
+	const totalViewers = computed(() => store.streamers.reduce((total, s) => total + (s.is_online ? s.viewers : 0), 0));
 
 	onMounted(async () => {
 		store.initListeners();
@@ -239,15 +242,23 @@
 </script>
 
 <template>
-	<div class="flex flex-col gap-5">
-		<!-- 标题与「添加主播」按钮：窄屏时按钮自动换行到下一行 / Title and add button: the button wraps below on narrow screens -->
-		<header class="flex flex-wrap items-start justify-between gap-3">
-			<div class="min-w-0">
-				<h1 class="text-xl font-bold mb-0.5">{{ t("home.title") }}</h1>
-				<p class="text-sm text-muted-foreground">
-					{{ t("home.subtitle", { total: store.streamers.length, recording: store.streamers.filter((s) => s.is_recording).length }) }}
-				</p>
+	<div class="flex flex-col gap-7">
+		<section class="rounded-2xl bg-[#111b2d] p-5 md:p-7 text-white overflow-hidden relative">
+			<div class="absolute -right-16 -top-20 size-64 rounded-full border-[28px] border-cyan-400/10" />
+			<div class="relative flex flex-wrap items-end justify-between gap-5">
+				<div><p class="text-xs uppercase tracking-[0.18em] font-bold text-cyan-300">Recording desk</p><h2 class="mt-2 text-2xl md:text-3xl font-bold tracking-tight">Your stream watchlist</h2><p class="mt-2 max-w-lg text-sm text-slate-300">Monitor live rooms, start a capture, and keep your recordings moving.</p></div>
+				<Button class="rounded-xl bg-cyan-400 text-slate-950 hover:bg-cyan-300" @click="showAdd = true">{{ t("home.addStreamer") }}</Button>
 			</div>
+		</section>
+
+		<section class="grid grid-cols-2 lg:grid-cols-3 gap-3">
+			<div class="rounded-2xl border border-slate-200 bg-white p-4 dark:border-white/8 dark:bg-[#111927]"><div class="flex items-center justify-between text-slate-500"><span class="text-xs font-bold uppercase tracking-wider">Watching</span><UsersRound class="size-4 text-cyan-500" /></div><p class="mt-3 text-2xl font-bold">{{ store.streamers.length }}</p><p class="text-xs text-slate-500">tracked rooms</p></div>
+			<div class="rounded-2xl border border-slate-200 bg-white p-4 dark:border-white/8 dark:bg-[#111927]"><div class="flex items-center justify-between text-slate-500"><span class="text-xs font-bold uppercase tracking-wider">Live now</span><Radio class="size-4 text-emerald-500" /></div><p class="mt-3 text-2xl font-bold">{{ onlineCount }}</p><p class="text-xs text-slate-500">{{ totalViewers.toLocaleString() }} viewers</p></div>
+			<div class="col-span-2 lg:col-span-1 rounded-2xl border border-slate-200 bg-white p-4 dark:border-white/8 dark:bg-[#111927]"><div class="flex items-center justify-between text-slate-500"><span class="text-xs font-bold uppercase tracking-wider">Capturing</span><CircleDotDashed class="size-4 text-rose-500" /></div><p class="mt-3 text-2xl font-bold">{{ stopAllTargets.length }}</p><p class="text-xs text-slate-500">active recordings</p></div>
+		</section>
+
+		<header class="flex flex-wrap items-center justify-between gap-3">
+			<div><h2 class="text-lg font-bold">Streamers</h2><p class="text-sm text-muted-foreground">{{ t("home.subtitle", { total: store.streamers.length, recording: stopAllTargets.length }) }}</p></div>
 			<div v-if="store.streamers.length > 0" class="flex flex-wrap items-center gap-2 shrink-0">
 				<Button
 					variant="outline"
@@ -265,9 +276,7 @@
 				>
 					{{ t("home.stopAll", { count: stopAllTargets.length }) }}
 				</Button>
-				<Button size="sm" @click="showAdd = true">{{ t("home.addStreamer") }}</Button>
 			</div>
-			<Button v-else class="shrink-0" @click="showAdd = true">{{ t("home.addStreamer") }}</Button>
 		</header>
 
 		<div
@@ -287,7 +296,7 @@
 
 		<div
 			v-else
-			class="grid grid-cols-[repeat(auto-fill,minmax(min(100%,260px),1fr))] gap-3.5"
+			class="grid grid-cols-[repeat(auto-fill,minmax(min(100%,300px),1fr))] gap-4"
 		>
 			<StreamerCard
 				v-for="s in [...store.streamers].sort((a, b) =>

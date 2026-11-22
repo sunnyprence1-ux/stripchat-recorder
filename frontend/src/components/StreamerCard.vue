@@ -70,20 +70,20 @@
 
 	function statusClass(s: StreamerEntry): string {
 		if (!s.is_online) return "bg-zinc-800 text-zinc-400 border-transparent";
-		if (s.status === "公开秀") return "bg-green-900 text-green-300 border-transparent";
+		if (s.status === "Public Show") return "bg-green-900 text-green-300 border-transparent";
 		return "bg-amber-900 text-amber-300 border-transparent";
 	}
 </script>
 
 <template>
 	<Card
-		class="overflow-hidden transition-colors py-0"
+		class="overflow-hidden rounded-2xl border-slate-200 bg-white py-0 shadow-sm transition-transform duration-200 hover:-translate-y-0.5 dark:border-white/8 dark:bg-[#111927]"
 		:class="{
 			'border-green-900/50': streamer.is_online && !streamer.is_recording,
 			'border-red-900/50': streamer.is_recording,
 		}"
 	>
-		<div class="relative aspect-video bg-muted overflow-hidden">
+		<div class="relative aspect-[16/9] bg-slate-900 overflow-hidden">
 			<img
 				v-if="fastThumbnail"
 				:src="fastThumbnail"
@@ -102,9 +102,9 @@
 			/>
 		</div>
 
-		<CardContent class="p-3 flex flex-col gap-2">
+		<CardContent class="p-4 flex flex-col gap-3">
 			<div class="flex items-center justify-between">
-				<span class="font-semibold text-sm truncate">{{ streamer.username }}</span>
+				<span class="font-bold text-base truncate">{{ streamer.username }}</span>
 				<Button
 					variant="ghost"
 					size="icon"
@@ -116,7 +116,7 @@
 				</Button>
 			</div>
 
-			<div class="flex items-center gap-1.5 flex-wrap">
+			<div class="flex items-center gap-1.5 flex-wrap border-b border-slate-100 pb-3 dark:border-white/8">
 				<Badge :class="statusClass(streamer)">
 					{{ streamer.is_online ? streamer.status : t("streamerCard.offline") }}
 				</Badge>

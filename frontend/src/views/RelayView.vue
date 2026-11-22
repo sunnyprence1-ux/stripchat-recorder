@@ -29,7 +29,7 @@
 		if (!isOnline) {
 			return { backgroundColor: "rgb(39 39 42)", color: "rgb(161 161 170)", borderColor: "transparent" };
 		}
-		if (status === "公开秀") {
+		if (status === "Public Show") {
 			return { backgroundColor: "rgb(20 83 45)", color: "rgb(134 239 172)", borderColor: "transparent" };
 		}
 		return { backgroundColor: "rgb(120 53 15)", color: "rgb(252 211 77)", borderColor: "transparent" };
