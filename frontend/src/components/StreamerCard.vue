@@ -24,7 +24,7 @@
 	import { ref, watch, computed } from "vue";
 	import { useFastThumbnail } from "@/composables/useFastThumbnail";
 	import { copyToClipboard } from "@/lib/utils";
-	import { Copy, Check } from "@lucide/vue";
+	import { Copy, Check, More, Record, Square } from "@/lib/icons";
 	import { useI18n } from "vue-i18n";
 
 	const props = defineProps<{ streamer: StreamerEntry }>();
@@ -85,9 +85,9 @@
 			</p>
 		</div>
 		<div class="signal-actions">
-			<Button v-if="streamer.is_recording" variant="destructive" @click="emit('stop')">■ Stop</Button>
-			<Button v-else :disabled="!streamer.is_recordable" :title="!streamer.is_recordable ? streamer.status : undefined" @click="emit('start')">● Record</Button>
-			<Button size="icon" variant="outline" :aria-expanded="detailsOpen" :aria-label="'Options for ' + streamer.username" @click="detailsOpen = !detailsOpen">⋯</Button>
+			<Button v-if="streamer.is_recording" variant="destructive" @click="emit('stop')"><Square /> Stop</Button>
+			<Button v-else :disabled="!streamer.is_recordable" :title="!streamer.is_recordable ? streamer.status : undefined" @click="emit('start')"><Record /> Record</Button>
+			<Button size="icon" variant="outline" :aria-expanded="detailsOpen" :aria-label="'Options for ' + streamer.username" @click="detailsOpen = !detailsOpen"><More /></Button>
 		</div>
 		<div v-if="detailsOpen" class="signal-row-details">
 			<div class="flex items-center gap-2">

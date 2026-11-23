@@ -236,12 +236,12 @@ fn build_params(
     req: &SendRequest,
 ) -> Result<(HashMap<String, serde_json::Value>, String), String> {
     if req.path.trim().is_empty() {
-        return Err("未指定要发送的视频 / no video path given".to_string());
+        return Err("No video path given".to_string());
     }
     let video = Path::new(req.path.trim());
     if !video.is_file() {
         return Err(format!(
-            "视频不存在 / video not found: {}",
+            "Video not found: {}",
             video.display()
         ));
     }
@@ -284,8 +284,7 @@ fn build_params(
     let chat_id = param_str(&params, "chat_id");
     if chat_id.is_empty() {
         return Err(
-            "未配置群组 ID：请在后处理节点或发送对话框里填写 / no chat id configured: fill it in \
-             on the pipeline node or in the send dialog"
+            "No chat ID configured. Enter it on the pipeline node or in the send dialog."
                 .to_string(),
         );
     }
@@ -327,7 +326,7 @@ pub fn send_inner(req: SendRequest, emitter: &Arc<dyn Emitter>, state: &Arc<AppS
         Some(m) => m,
         None => {
             let msg = format!(
-                "未找到 Telegram 模块（modules/{}）/ Telegram module not found",
+                "Telegram module not found in modules/{}",
                 TELEGRAM_MODULE_ID
             );
             state.tg_task_fail(&path_str, &msg, &chat_id, delete_after_send);
@@ -497,7 +496,7 @@ mod tests {
     #[test]
     fn empty_path_is_rejected() {
         let err = build_params(&HashMap::new(), &SendRequest::default()).unwrap_err();
-        assert!(err.contains("未指定") || err.contains("no video path"));
+        assert!(err.contains("No video path"));
     }
 
     #[test]
@@ -507,7 +506,7 @@ mod tests {
             ..Default::default()
         };
         let err = build_params(&HashMap::new(), &req).unwrap_err();
-        assert!(err.contains("视频不存在") || err.contains("video not found"));
+        assert!(err.contains("Video not found"));
     }
 
     #[test]
@@ -546,7 +545,7 @@ mod tests {
             ..Default::default()
         };
         let err = build_params(&HashMap::new(), &req).unwrap_err();
-        assert!(err.contains("群组 ID") || err.contains("chat id"));
+        assert!(err.contains("chat ID"));
         let _ = std::fs::remove_file(&tmp);
     }
 

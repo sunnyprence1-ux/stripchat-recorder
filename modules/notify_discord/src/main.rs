@@ -25,8 +25,8 @@ use std::time::{Duration, Instant};
 
 const DESCRIBE: &str = r#"{
     "id": "notify_discord",
-    "name": "Discord 通知 0.2.0",
-    "description": "将录制信息和封面图发送到 Discord Webhook",
+    "name": "Discord Notification 0.2.0",
+    "description": "Send recording info and cover image to a Discord Webhook",
     "params": [
         {
         "key": "webhook_url",
@@ -36,13 +36,13 @@ const DESCRIBE: &str = r#"{
         },
         {
         "key": "proxy",
-        "label": "代理地址（支持 http://、socks5://）",
+        "label": "Proxy (http:// or socks5://)",
         "type": "string",
         "default": ""
         },
         {
         "key": "username",
-        "label": "Bot 显示名称",
+        "label": "Bot display name",
         "type": "string",
         "default": "Recorder Bot"
         }

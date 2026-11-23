@@ -136,7 +136,7 @@ pub fn run_postprocess_for_path_inner(
 
     if !missing.is_empty() {
         let msg = format!(
-            "后处理模块缺失：{}，请检查 modules/ 目录",
+            "Post-processing modules missing: {}. Check the modules directory.",
             missing.join(", ")
         );
         state.pp_task_finish(&path_str, false);

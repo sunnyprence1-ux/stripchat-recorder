@@ -53,7 +53,7 @@ pub async fn list_streamers(
                 status: status
                     .as_ref()
                     .map(|s| s.status.clone())
-                    .unwrap_or_else(|| "未知".to_string()),
+                    .unwrap_or_else(|| "Unknown".to_string()),
                 thumbnail_url: status.and_then(|s| s.thumbnail_url),
             }
         })
@@ -68,7 +68,7 @@ pub async fn add_streamer(
 ) -> Result<()> {
     let username = username.trim().to_lowercase();
     if username.is_empty() {
-        return Err("用户名不能为空".into());
+        return Err("Username cannot be empty".into());
     }
 
     let settings = state.get_settings();

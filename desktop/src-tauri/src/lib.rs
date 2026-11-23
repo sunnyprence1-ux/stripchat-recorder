@@ -182,7 +182,7 @@ async fn setup_app(app_handle: tauri::AppHandle) {
         emitter.emit(
             "ffmpeg-missing",
             &serde_json::json!({
-                "message": "ffmpeg 未安装或不在 PATH 中，录制功能将不可用"
+                "message": "Recording is unavailable because FFmpeg is missing or not on PATH."
             }),
         );
     }

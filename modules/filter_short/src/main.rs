@@ -22,18 +22,18 @@ use std::path::PathBuf;
 /// Module metadata JSON, output via `--describe` argument.
 const DESCRIBE: &str = r#"{
     "id": "filter_short",
-    "name": "过滤短视频 0.2.0",
-    "description": "删除时长低于指定阈值的视频文件",
+    "name": "Filter Short Videos 0.2.0",
+    "description": "Delete video files shorter than the specified duration threshold",
     "params": [
         {
         "key": "min_duration",
-        "label": "最短时长（秒）",
+        "label": "Minimum duration (seconds)",
         "type": "number",
         "default": 60
         },
         {
         "key": "dry_run",
-        "label": "仅预览，不实际删除",
+        "label": "Dry run (preview only, no deletion)",
         "type": "boolean",
         "default": false
         }
@@ -60,7 +60,7 @@ fn run() -> Result<(), String> {
 
     // 使用 ffprobe 获取视频时长 / Get video duration using ffprobe
     let duration = video_duration(&input)
-        .ok_or_else(|| "无法获取视频时长，请确认 ffprobe 已安装".to_string())?;
+        .ok_or_else(|| "Could not read video duration. Check that ffprobe is installed.".to_string())?;
 
     // 上报完成进度 / Report completion progress
     println!("PROGRESS:{}/{}", PROGRESS_SCALE, PROGRESS_SCALE);

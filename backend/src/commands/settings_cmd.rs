@@ -140,6 +140,6 @@ pub fn get_disk_space_inner(output_dir: &str) -> Result<DiskSpace> {
     }
 
     Err(crate::core::error::AppError::Other(
-        "无法获取磁盘空间信息".to_string(),
+        "Could not read disk space information".to_string(),
     ))
 }

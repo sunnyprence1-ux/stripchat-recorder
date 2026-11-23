@@ -314,7 +314,7 @@ pub fn run_pipeline(
                     node_id: node.node_id.clone(),
                     module_id: node.module_id.clone(),
                     success: false,
-                    message: format!("模块 '{}' 不存在，请检查 modules/ 目录", node.module_id),
+                    message: format!("Module '{}' was not found. Check the modules directory.", node.module_id),
                     output: None,
                     delete_input: false,
                 });
@@ -755,7 +755,7 @@ pub fn run_module_test(
     if !module.testable {
         return TestResult {
             success: false,
-            message: format!("模块 '{}' 不支持自检", module.id),
+            message: format!("Module '{}' does not support self-tests", module.id),
             logs: vec![],
         };
     }
@@ -868,7 +868,7 @@ pub fn run_module_test(
     let success = !timed_out && exit_ok;
 
     let message = if timed_out {
-        format!("自检超时（{} 秒）", TEST_TIMEOUT.as_secs())
+        format!("Self-test timed out after {} seconds", TEST_TIMEOUT.as_secs())
     } else if success {
         if last_stdout.is_empty() {
             "OK".to_string()

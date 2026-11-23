@@ -69,7 +69,7 @@ pub async fn add_streamer(
 ) -> CmdResult<serde_json::Value> {
     let username = username.trim().to_lowercase();
     if username.is_empty() {
-        return Err("用户名不能为空".to_string());
+        return Err("Username cannot be empty".to_string());
     }
     let settings = state.app_state.get_settings();
     let api = stripchat_recorder_lib::streaming::stripchat::StripchatApi::new_api_only(
@@ -254,7 +254,7 @@ pub async fn sync_mouflon_keys(state: State<'_, DesktopState>) -> CmdResult<serd
         .mouflon_sync_url
         .as_deref()
         .filter(|u| !u.is_empty())
-        .ok_or("未配置 mouflon_sync_url")?
+        .ok_or("No Mouflon sync URL is configured")?
         .to_string();
     let token = settings.mouflon_sync_token.clone();
     let updated = state
@@ -351,7 +351,7 @@ pub async fn run_postprocess_cmd(
 ) -> CmdResult<serde_json::Value> {
     let pipeline = state.app_state.get_pipeline();
     if pipeline.nodes.is_empty() {
-        return Err("后处理流水线为空".to_string());
+        return Err("The post-processing workflow is empty".to_string());
     }
     let video_path = std::path::PathBuf::from(&path);
     let emitter = Arc::clone(&state.emitter);
@@ -371,7 +371,7 @@ pub async fn run_postprocess_batch(
 ) -> CmdResult<serde_json::Value> {
     let pipeline = state.app_state.get_pipeline();
     if pipeline.nodes.is_empty() {
-        return Err("后处理流水线为空".to_string());
+        return Err("The post-processing workflow is empty".to_string());
     }
     for path in paths {
         let video_path = std::path::PathBuf::from(&path);
@@ -447,7 +447,7 @@ pub async fn test_module(
             Some(m) => stripchat_recorder_lib::postprocess::pipeline::run_module_test(&m, &params),
             None => stripchat_recorder_lib::postprocess::pipeline::TestResult {
                 success: false,
-                message: format!("模块 '{}' 不存在", module_id),
+                message: format!("Module '{}' was not found", module_id),
                 logs: vec![],
             },
         }
@@ -472,7 +472,7 @@ pub async fn login_start(
             .find(|m| m.id == module_id);
         match module {
             Some(m) => stripchat_recorder_lib::postprocess::login::start_login(&m, &params, false, None),
-            None => Err(format!("模块 '{}' 不存在", module_id)),
+            None => Err(format!("Module '{}' was not found", module_id)),
         }
     })
     .await
@@ -613,9 +613,9 @@ pub async fn read_output_file(
         .into_iter()
         .filter_map(|root| root.canonicalize().ok())
         .collect();
-    let canonical_requested = requested.canonicalize().map_err(|_| "文件不存在".to_string())?;
+    let canonical_requested = requested.canonicalize().map_err(|_| "File not found".to_string())?;
     if !allowed_roots.iter().any(|root| canonical_requested.starts_with(root)) {
-        return Err("访问被拒绝".to_string());
+        return Err("Access denied".to_string());
     }
 
     let data = std::fs::read(&canonical_requested).map_err(|e| e.to_string())?;

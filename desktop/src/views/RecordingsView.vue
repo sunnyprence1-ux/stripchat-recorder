@@ -18,6 +18,7 @@
     - Multi-column sorting and group collapsing
 -->
 <script setup lang="ts">
+	import { ChevronDown } from "@/lib/icons";
 	import { onMounted, onUnmounted, computed, ref, watchEffect } from "vue";
 	import { call, on } from "@/lib/api";
 	import { useNotify } from "../composables/useNotify";
@@ -28,7 +29,7 @@
 	import { Button } from "@/components/ui/button";
 	import { Badge } from "@/components/ui/badge";
 	import { Checkbox } from "@/components/ui/checkbox";
-	import { Loader2 } from "@lucide/vue";
+	import { Loader2 } from "@/lib/icons";
 	import { Progress } from "@/components/ui/progress";
 	import {
 		Dialog,
@@ -826,9 +827,7 @@
 								/>
 							</TableCell>
 							<TableCell colspan="8" class="font-semibold">
-								<span class="mr-2 text-muted-foreground text-xs">{{
-									collapsedGroups.has(group.username) ? "▶" : "▼"
-								}}</span>
+								<ChevronDown class="mr-2 inline size-4 text-muted-foreground" :class="{ '-rotate-90': collapsedGroups.has(group.username) }" />
 								{{ group.username }}
 								<Badge
 									v-if="group.hasRecording"

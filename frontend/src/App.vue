@@ -19,7 +19,7 @@
 	import { computed, onMounted, onUnmounted, ref } from "vue";
 	import { RouterView, useRouter, useRoute } from "vue-router";
 	import NotifyLayer from "./components/NotifyLayer.vue";
-	import { Users, Video, Workflow, Radio, Search, Settings, Activity } from "@lucide/vue";
+	import { Brand, More, Users, Video, Workflow, Radio, Search, Settings, Activity } from "@/lib/icons";
 	import { call, on, onSseReconnect, onSseDisconnect } from "@/lib/api";
 	import { useNotify } from "@/composables/useNotify";
 	import { toast as sonnerToast } from "vue-sonner";
@@ -233,7 +233,7 @@
 		<div v-else key="main" class="app-shell-height app-frame signal-shell grid grid-cols-1 md:grid-cols-[68px_minmax(0,1fr)] lg:grid-cols-[172px_minmax(0,1fr)] overflow-hidden">
 			<aside class="hidden md:flex border-r border-white/10 bg-[#101b15] flex-col items-center lg:items-stretch py-5 text-[#a8b8ae]">
 				<button class="flex items-center gap-3 px-3 lg:px-5" aria-label="Go to watchlist" @click="router.push('/')">
-					<span class="grid size-10 shrink-0 place-items-center rounded-xl bg-[#c2f368] text-[#142007] font-black text-xs">◉</span>
+					<span class="grid size-10 shrink-0 place-items-center rounded-xl bg-[#c2f368] text-[#142007] font-black text-xs"><Brand class="size-5" /></span>
 					<span class="hidden lg:block text-left"><span class="block text-sm font-bold tracking-wide text-[#eef2e9]">Signal Room</span><span class="mt-0.5 block text-[9px] uppercase tracking-[0.18em] text-[#a79d8a]">Stream operations</span></span>
 				</button>
 				<p class="hidden lg:block px-5 mt-9 mb-2 text-[9px] uppercase tracking-[0.2em] font-bold text-white/35">Workspace</p>
@@ -250,7 +250,7 @@
 			<main class="min-w-0 overflow-hidden bg-[#0e1712] dark:bg-[#0e1712]">
 				<header class="h-[4.5rem] md:h-[4.75rem] border-b border-[#34493d] dark:border-white/8 bg-[#121f18] dark:bg-[#121f18] px-4 md:px-8 flex items-center justify-between gap-4">
 					<div class="flex items-center gap-3 min-w-0">
-						<div class="md:hidden grid size-9 place-items-center rounded-xl bg-[#c2f368] text-[#142007] font-black text-xs">◉</div>
+						<div class="md:hidden grid size-9 place-items-center rounded-xl bg-[#c2f368] text-[#142007] font-black text-xs"><Brand class="size-5" /></div>
 						<div class="min-w-0"><p class="text-[9px] md:text-[10px] tracking-[0.18em] font-bold uppercase text-[#bbd3c3]">Signal Room</p><p v-if="route.path !== '/'" class="truncate text-base md:text-lg font-bold text-foreground dark:text-white">{{ t(pageTitle) }}</p></div>
 					</div>
 					<div class="flex items-center gap-2 shrink-0">
@@ -276,7 +276,7 @@
 				<button type="button" :aria-expanded="moreOpen" aria-controls="signal-more-nav"
 					:class="{ 'signal-dock-active': moreNav.some((item) => item.to === route.path) }"
 					@click="moreOpen = !moreOpen">
-					<span aria-hidden="true" class="text-xl leading-none">⋯</span> More
+					<More class="size-5" /> More
 				</button>
 				<div v-if="moreOpen" id="signal-more-nav" class="signal-more-nav">
 					<button v-for="item in moreNav" :key="item.to" type="button"

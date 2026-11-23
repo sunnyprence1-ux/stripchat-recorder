@@ -744,7 +744,7 @@ impl AppState {
     pub fn add_streamer(&self, username: &str) -> Result<()> {
         let mut data = self.data.write();
         if data.streamers.iter().any(|s| s.username == username) {
-            return Err(AppError::Other(format!("模特 {} 已存在", username)));
+            return Err(AppError::Other(format!("Streamer {} already exists", username)));
         }
         let auto_record = data.settings.auto_record;
         data.streamers.push(StreamerData {

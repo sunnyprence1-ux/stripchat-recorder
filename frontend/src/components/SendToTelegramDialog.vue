@@ -41,7 +41,7 @@
 	import { useNotify } from "@/composables/useNotify";
 	import { useTelegramSend } from "@/composables/useTelegramSend";
 	import { call } from "@/lib/api";
-	import { ChevronDown, Loader2, RefreshCw, Send, Square, Trash2, TriangleAlert } from "@lucide/vue";
+	import { ChevronDown, Loader2, RefreshCw, Send, Square, Trash2, TriangleAlert } from "@/lib/icons";
 
 	const props = defineProps<{ paths: string[] }>();
 	const emit = defineEmits<{ close: [] }>();

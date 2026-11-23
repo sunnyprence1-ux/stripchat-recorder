@@ -88,15 +88,12 @@ fn build_api_client(proxy_url: Option<&str>) -> Result<wreq::Client> {
 fn api_status_error(status: u16, username: &str) -> AppError {
     match status {
         403 | 429 => AppError::Other(format!(
-            "API 返回 {status} ({username})：请求被 Cloudflare 拦截。\
-             当前网络可能被站点限制，请在设置中配置 API 代理后重试 / \
-             Blocked by Cloudflare; configure an API proxy in Settings and retry"
+            "API returned HTTP {status} ({username}). Check your API connection in Settings."
         )),
         451 => AppError::Other(format!(
-            "API 返回 451 ({username})：该地区无法访问该站点，请配置代理 / \
-             Not available in this region, configure a proxy"
+            "API returned HTTP 451 ({username}). The service is unavailable in this region."
         )),
-        _ => AppError::Other(format!("API 返回 {status} ({username})")),
+        _ => AppError::Other(format!("API returned HTTP {status} ({username})")),
     }
 }
 
@@ -393,11 +390,43 @@ impl StripchatApi {
             {
                 return None;
             }
-            let thumbnail_url = ["previewUrl", "snapshotUrl", "thumbnailUrl"]
-                .iter()
-                .filter_map(|key| model[*key].as_str())
-                .find(|url| url.starts_with("https://"));
-            Some(serde_json::json!({ "username": username, "thumbnail_url": thumbnail_url }))
+            let mut thumbnails: Vec<String> = ["snapshotUrl", "previewUrl", "thumbnailUrl", "previewImageUrl"]
+                .into_iter()
+                .filter_map(|key| model[key].as_str())
+                .filter_map(|url| {
+                    let url = url.trim();
+                    if url.starts_with("//") {
+                        Some(format!("https:{url}"))
+                    } else if url.starts_with("https://") {
+                        Some(url.to_owned())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            let timestamp = model["snapshotTimestamp"].as_u64().or_else(|| {
+                model["snapshotTimestamp"].as_str()?.parse().ok()
+            });
+            if let (Some(timestamp), Some(stream)) = (timestamp, model["streamName"].as_str()) {
+                if timestamp > 0 && !stream.is_empty()
+                    && stream.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+                {
+                    thumbnails.push(format!("https://img.doppiocdn.net/thumbs/{timestamp}/{stream}"));
+                }
+            }
+            let country = ["countryCode", "country", "country_code"].into_iter()
+                .find_map(|key| model[key].as_str().or_else(|| model[key]["code"].as_str()))
+                .map(str::trim)
+                .filter(|country| !country.is_empty());
+            let viewers = ["viewersCount", "viewers", "viewCount"].into_iter()
+                .find_map(|key| model[key].as_u64().or_else(|| model[key].as_str()?.parse().ok()));
+            Some(serde_json::json!({
+                "username": username,
+                "thumbnail_url": thumbnails.first(),
+                "thumbnail_urls": thumbnails,
+                "country": country,
+                "viewers": viewers,
+            }))
         }).collect();
         Ok(serde_json::json!({
             "rooms": rooms,
@@ -456,7 +485,7 @@ impl StripchatApi {
 
         if !broadcasts_resp.status().is_success() {
             if broadcasts_resp.status().as_u16() == 404 {
-                return Err(AppError::UserNotFound(format!("用户 {} 不存在", username)));
+                return Err(AppError::UserNotFound(format!("User {} was not found", username)));
             }
             return Err(api_status_error(broadcasts_resp.status().as_u16(), username));
         }
@@ -464,7 +493,7 @@ impl StripchatApi {
         let broadcasts_json: serde_json::Value = broadcasts_resp.json().await?;
         let model_id = broadcasts_json["item"]["streamName"]
             .as_str()
-            .ok_or_else(|| AppError::Other(format!("无法获取 {} 的 streamName", username)))?
+            .ok_or_else(|| AppError::Other(format!("Could not get the stream name for {}", username)))?
             .to_string();
 
         // 第二步：使用 model_id 请求 cam 接口，获取直播状态详情
@@ -478,7 +507,7 @@ impl StripchatApi {
 
         if !resp.status().is_success() {
             if resp.status().as_u16() == 404 {
-                return Err(AppError::UserNotFound(format!("用户 {} 不存在", username)));
+                return Err(AppError::UserNotFound(format!("User {} was not found", username)));
             }
             return Err(api_status_error(resp.status().as_u16(), username));
         }
@@ -586,8 +615,7 @@ where
     // Attempt 3: no proxy — return explicit guidance
     tracing::error!("Cloudflare 403/429 persists with no proxy configured.");
     Err(AppError::Other(
-        "API 被 Cloudflare 拦截。请在设置中配置 API 代理、CDN 代理或镜像站。 / \
-         Blocked by Cloudflare; please configure API proxy / CDN proxy / mirror site in Settings."
+        "The API request was blocked by Cloudflare. Check the network settings."
         .into(),
     ))
 }

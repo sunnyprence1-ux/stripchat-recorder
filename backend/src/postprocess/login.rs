@@ -188,7 +188,7 @@ fn wait_for_state(
         if started.elapsed() > LOGIN_STEP_TIMEOUT {
             shutdown(session);
             return Err(format!(
-                "登录超时（{} 秒没有响应）",
+                "Sign-in timed out after {} seconds without a response",
                 LOGIN_STEP_TIMEOUT.as_secs()
             ));
         }
@@ -237,11 +237,11 @@ fn wait_for_state(
                         .rev()
                         .find(|l| l.stream == "stderr")
                         .map(|l| l.line.clone())
-                        .unwrap_or_else(|| "模块没有输出任何信息".to_string());
+                        .unwrap_or_else(|| "The module did not produce any output".to_string());
                     return Ok(LoginUpdate {
                         login_id: login_id.to_string(),
                         state: "error".to_string(),
-                        detail: format!("{}（退出码 {}）", last_err, code),
+                        detail: format!("{} (exit code {})", last_err, code),
                         session_path: session.session_path.clone(),
                         logs,
                     });
@@ -249,7 +249,7 @@ fn wait_for_state(
             }
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => {
-                return Err("登录进程已断开".to_string());
+                return Err("The sign-in process disconnected".to_string());
             }
         }
     }
@@ -270,7 +270,7 @@ pub fn start_login(
     proxy_url: Option<&str>,
 ) -> Result<LoginUpdate, String> {
     if !module.loginable {
-        return Err(format!("模块 '{}' 不支持登录", module.id));
+        return Err(format!("Module '{}' does not support sign-in", module.id));
     }
 
     cleanup_idle();
@@ -298,7 +298,7 @@ pub fn start_login(
         cmd.env(format!("PP_PARAM_{}", key.to_uppercase()), env_val);
     }
 
-    let mut child = cmd.spawn().map_err(|e| format!("启动失败: {}", e))?;
+    let mut child = cmd.spawn().map_err(|e| format!("Could not start the sign-in process: {}", e))?;
     let stdin = child.stdin.take();
     let (tx, rx) = mpsc::channel::<Event>();
 
@@ -368,7 +368,7 @@ pub fn send_login_input(login_id: &str, value: &str) -> Result<LoginUpdate, Stri
         };
         map.get(login_id).cloned()
     };
-    let session = session.ok_or_else(|| "登录会话不存在或已结束".to_string())?;
+    let session = session.ok_or_else(|| "The sign-in session is missing or has ended".to_string())?;
 
     let mut guard = match session.lock() {
         Ok(g) => g,
@@ -381,9 +381,9 @@ pub fn send_login_input(login_id: &str, value: &str) -> Result<LoginUpdate, Stri
         let stdin = guard
             .stdin
             .as_mut()
-            .ok_or_else(|| "登录进程已结束".to_string())?;
-        writeln!(stdin, "{}", value).map_err(|e| format!("写入登录进程失败: {}", e))?;
-        stdin.flush().map_err(|e| format!("写入登录进程失败: {}", e))?;
+            .ok_or_else(|| "The sign-in process has ended".to_string())?;
+        writeln!(stdin, "{}", value).map_err(|e| format!("Could not write to the sign-in process: {}", e))?;
+        stdin.flush().map_err(|e| format!("Could not write to the sign-in process: {}", e))?;
     }
 
     let update = wait_for_state(&mut guard, login_id)?;
@@ -497,7 +497,7 @@ mod tests {
 /// when the session file exists but is not signed in, or `RefreshStatus::Error(String)` otherwise.
 pub fn refresh_session(module: &ModuleInfo, api_id: i32, proxy: &str) -> Result<RefreshStatus, String> {
     if !module.loginable {
-        return Err(format!("模块 '{}' 不支持登录", module.id));
+        return Err(format!("Module '{}' does not support sign-in", module.id));
     }
 
     let mut cmd = Command::new(&module.exe_path);
@@ -509,7 +509,7 @@ pub fn refresh_session(module: &ModuleInfo, api_id: i32, proxy: &str) -> Result<
         .env("api_id", api_id.to_string())
         .env("proxy", proxy);
 
-    let mut child = cmd.spawn().map_err(|e| format!("启动刷新失败: {}", e))?;
+    let mut child = cmd.spawn().map_err(|e| format!("Could not refresh the session: {}", e))?;
     let (tx, rx) = mpsc::channel::<Event>();
 
     let stdout = child.stdout.take();
@@ -561,7 +561,7 @@ pub fn refresh_session(module: &ModuleInfo, api_id: i32, proxy: &str) -> Result<
 
     if let Err(e) = child.wait() {
         if let RefreshStatus::Ok(_) = result {
-            result = RefreshStatus::Error(format!("刷新进程退出失败: {}", e));
+            result = RefreshStatus::Error(format!("The session refresh process failed: {}", e));
         }
     }
 
@@ -589,8 +589,8 @@ impl RefreshStatus {
 
     pub fn message(&self) -> String {
         match self {
-            RefreshStatus::Ok(user) => format!("已刷新会话：{}", user),
-            RefreshStatus::NotAuthorized => "会话文件存在但未登录（未授权）。请先登录 Telegram 账号".to_string(),
+            RefreshStatus::Ok(user) => format!("Session refreshed: {}", user),
+            RefreshStatus::NotAuthorized => "The session file exists but is unauthorized. Sign in to Telegram first.".to_string(),
             RefreshStatus::Error(e) => e.clone(),
         }
     }

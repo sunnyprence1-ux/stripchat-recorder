@@ -9,7 +9,7 @@
 import { ref, onMounted } from "vue";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { ImageIcon, Loader2, Search, X } from "@lucide/vue";
+import { ImageIcon, Loader2, Search, X } from "@/lib/icons";
 import { useScrollbar } from "@/composables/useScrollbar";
 import {
   Dialog,

@@ -89,117 +89,117 @@ const PROGRESS_SCALE: usize = 10_000;
 /// Module metadata JSON, output via `--describe` argument.
 const DESCRIBE: &str = r#"{
     "id": "notify_telegram",
-    "name": "Telegram 通知 0.6.0",
-    "description": "把录制好的视频通过 MTProto 发送到 Telegram（支持超过 50MB 的大文件，支持 HTTP/SOCKS5 代理）。默认只发视频、不带任何文字；文字说明和封面图都可以单独开关。可按模特自动创建/复用群组话题（Topic）并把视频发送到对应话题。默认使用已登录的真实账号：可列出话题、避免重复创建，高级会员还能上传 4GB 单文件。支持多个用户会话：主账号遇到 FLOOD_WAIT / FLOOD_PREMIUM_WAIT 时自动切换到备用账号并重新上传",
+    "name": "Telegram Notification 0.6.0",
+    "description": "Send finished videos to Telegram via MTProto (files over 50 MB and HTTP/SOCKS5 proxies supported). Posts the video only by default — no text at all; the text caption and the cover image each have their own switch. Can create/reuse one group forum topic per model and post the video into it. Uses your signed-in account by default: it can list existing topics (no duplicates) and premium accounts can upload single files up to 4 GB. Supports multiple user sessions: when the current account is upload-throttled, the next signed-in account is used and the file is re-uploaded",
     "testable": true,
     "loginable": true,
     "params": [
         {
         "key": "account",
-        "label": "登录方式（auto = 已登录的真实账号优先 / user = 只用用户账号 / bot = 只用机器人）",
+        "label": "Login mode (auto = your signed-in account wins / user = your account only / bot = bot account only)",
         "type": "select",
         "default": "auto",
         "options": ["auto", "user", "bot"]
         },
         {
         "key": "session_label",
-        "label": "当前会话标签（留空 = 主会话 {api_id}_user.db；登录备用账号时填写标签，例如 backup1）",
+        "label": "Current session label (blank = primary {api_id}_user.db; enter a label such as backup1 when signing in another account)",
         "type": "string",
         "default": ""
         },
         {
         "key": "fallback_sessions",
-        "label": "备用会话标签（逗号分隔，例如 backup1,backup2；主账号遇到 FLOOD_WAIT / FLOOD_PREMIUM_WAIT 时按顺序切换。每个备用账号都要先用对应标签登录；切换后从原文件重新上传）",
+        "label": "Backup session labels (comma separated, e.g. backup1,backup2. On FLOOD_WAIT / FLOOD_PREMIUM_WAIT the next signed-in account is tried and the whole file is re-uploaded)",
         "type": "string",
         "default": ""
         },
         {
         "key": "api_id",
-        "label": "API ID（从 my.telegram.org 获取）",
+        "label": "API ID (from my.telegram.org)",
         "type": "string",
         "default": ""
         },
         {
         "key": "api_hash",
-        "label": "API Hash（仅机器人账号需要，用户账号可留空）",
+        "label": "API Hash (bot accounts only — leave empty for a user account)",
         "type": "string",
         "default": ""
         },
         {
         "key": "bot_token",
-        "label": "Bot Token（从 @BotFather 获取，仅机器人账号需要）",
+        "label": "Bot Token (from @BotFather, bot accounts only)",
         "type": "string",
         "default": ""
         },
         {
         "key": "chat_id",
-        "label": "Chat ID（群组/超级群组填 -100xxxxxxxxxx 格式；私有群组没有 username，只能填 ID）",
+        "label": "Chat ID (groups and supergroups: -100xxxxxxxxxx; a private group has no username, so the id is the only way to target it)",
         "type": "string",
         "default": ""
         },
         {
         "key": "username",
-        "label": "群组 Username（可选：公开群组才填，如 mygroupname，不含 @；私有群组留空，改用 Chat ID）",
+        "label": "Group username (optional — public groups only, e.g. mygroupname, without @; leave empty for private groups and use Chat ID)",
         "type": "string",
         "default": ""
         },
         {
         "key": "proxy",
-        "label": "代理地址（支持 http://、socks5://）",
+        "label": "Proxy (http:// or socks5://)",
         "type": "string",
         "default": ""
         },
         {
         "key": "send_video",
-        "label": "同时发送视频文件",
+        "label": "Also send video file",
         "type": "boolean",
         "default": true
         },
         {
         "key": "send_caption",
-        "label": "附带文字说明（模特名、时间、时长、文件名、大小）。关闭后消息里没有任何文字，只有视频",
+        "label": "Attach a text caption (model name, timestamp, duration, file name, size). With this off the message carries no text at all — just the video",
         "type": "boolean",
         "default": false
         },
         {
         "key": "send_cover",
-        "label": "同时发送封面图（视频截帧）。关闭后相册里只有视频",
+        "label": "Also send the cover image (a frame extracted from the video). With this off the album holds the video only",
         "type": "boolean",
         "default": true
         },
         {
         "key": "cover_first",
-        "label": "封面图先上传固化，上传完成后单独作为一条图片消息发出去，再发送视频。关闭后封面图和视频合在同一条相册消息里",
+        "label": "Upload the cover first; once the video upload finishes, post the cover as its own message before the video. With this off the cover and the video go out together as one album message",
         "type": "boolean",
         "default": true
         },
         {
         "key": "topic_per_model",
-        "label": "为每个模特创建/复用群组话题（Topic），视频发送到对应话题",
+        "label": "Create/reuse a group topic per model and upload into it",
         "type": "boolean",
         "default": true
         },
         {
         "key": "delete_after_send",
-        "label": "发送成功后删除本地数据（成片、分片、元数据和模块副产物），释放服务器空间",
+        "label": "Delete local data after a successful send (video, segments, metadata and module side files) to free server space",
         "type": "boolean",
         "default": true
         },
         {
         "key": "batch_size",
-        "label": "批量并发上传视频数（默认 3，范围 1–10）。多个成片同时发送时，最多同时上传多少个视频，其余自动排队",
+        "label": "Maximum simultaneous video uploads in a batch (default 3, range 1–10). Remaining videos wait in the queue.",
         "type": "number",
         "default": 3
         },
         {
         "key": "upload_workers",
-        "label": "每个视频的并发上传分块数（默认 16，上限 16；0 = 默认）。WZGram 实际最多使用 8 个会话：Telegram 非 Premium 账号速率过高会触发 FLOOD_PREMIUM_WAIT_X，降低并发反而更快",
+        "label": "Concurrent upload parts (default 16, max 16; 0 = default). Serial uploads wait for the server to acknowledge every 512KB part; running several at once overlaps those round trips — a 12MB video measured ~1.8x faster (the uplink itself is the ceiling)",
         "type": "number",
         "default": 16
         },
         {
         "key": "upload_engine",
-        "label": "上传引擎（wzgram = WZGram 高速上传 / grammers = 内置 Rust 上传）。WZGram 复用已登录会话，失败时自动回退到 Rust",
+        "label": "Upload engine (wzgram = fast WZGram uploader / grammers = built-in Rust uploader). WZGram reuses the signed-in session and falls back to Rust on failure",
         "type": "select",
         "default": "wzgram",
         "options": ["wzgram", "grammers"]
@@ -3907,7 +3907,7 @@ fn run() -> Result<(), String> {
     // directory, metadata, module side outputs). This must come after OUTPUT, because the
     // host only honours the request when the node succeeded.
     if delete_after_send {
-        println!("STATUS:已上传，正在删除本地数据 / uploaded, deleting local data");
+        println!("STATUS:Upload complete. Deleting local data");
         println!("DELETE_INPUT");
     }
 

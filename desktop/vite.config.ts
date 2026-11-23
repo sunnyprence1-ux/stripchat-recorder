@@ -27,7 +27,6 @@ export default defineConfig({
           if (id.includes("/node_modules/vue-i18n/")) return "vendor-i18n";
           if (id.includes("/node_modules/reka-ui/")) return "vendor-reka";
           if (["@vueuse/core", "clsx", "tailwind-merge", "class-variance-authority"].some((m) => id.includes(`/node_modules/${m}/`))) return "vendor-utils";
-          if (id.includes("/node_modules/@lucide/")) return "vendor-icons";
           if (id.includes("/node_modules/vue-sonner/")) return "vendor-sonner";
         },
       },

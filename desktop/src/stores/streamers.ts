@@ -163,14 +163,14 @@ export const useStreamersStore = defineStore("streamers", () => {
 				const p = payload as { username: string };
 				// 非本地操作时显示提示 / Show notification for non-local actions
 				if (!localActions.has(`add:${p.username}`)) {
-					sonnerToast.info(`其他客户端添加了主播：${p.username}`);
+					sonnerToast.info(`Another client added streamer: ${p.username}`);
 				}
 				void fetchStreamers();
 			}),
 			on("streamer-removed", (payload) => {
 				const p = payload as { username: string };
 				if (!localActions.has(`remove:${p.username}`)) {
-					sonnerToast.info(`其他客户端移除了主播：${p.username}`);
+					sonnerToast.info(`Another client removed streamer: ${p.username}`);
 				}
 				streamers.value = streamers.value.filter(
 					(s) => s.username !== p.username,
@@ -212,7 +212,7 @@ export const useStreamersStore = defineStore("streamers", () => {
 				const p = payload as { username: string; enabled: boolean };
 				if (!localActions.has(`auto:${p.username}`)) {
 					sonnerToast.info(
-						`其他客户端${p.enabled ? "开启" : "关闭"}了 ${p.username} 的自动录制`,
+						`Another client ${p.enabled ? "enabled" : "disabled"} auto-recording for ${p.username}`,
 					);
 				}
 				const s = streamers.value.find((s) => s.username === p.username);
@@ -220,7 +220,7 @@ export const useStreamersStore = defineStore("streamers", () => {
 			}),
 			on("api-error", (payload) => {
 				const p = payload as { message: string };
-				sonnerToast.error(`Stripchat API连接错误: ${p.message}`);
+				sonnerToast.error(`Stripchat API connection error: ${p.message}`);
 			}),
 		]);
 	}

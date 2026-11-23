@@ -193,7 +193,7 @@ pub fn delete_recording_inner(
     let p = std::path::Path::new(path);
     if recorder.is_file_locked(p) {
         return Err(crate::core::error::AppError::Other(
-            "录制中，无法删除".to_string(),
+            "Cannot delete an active recording".to_string(),
         ));
     }
 

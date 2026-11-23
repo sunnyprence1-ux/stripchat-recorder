@@ -25,7 +25,7 @@
 	import { useNotify } from "@/composables/useNotify";
 	import { call } from "@/lib/api";
 	import { Button } from "@/components/ui/button";
-	import { GripVertical, ChevronUp, ChevronDown, X, Loader2, FlaskConical, KeyRound, RefreshCw } from "@lucide/vue";
+	import { GripVertical, ChevronUp, ChevronDown, X, Loader2, FlaskConical, KeyRound, RefreshCw } from "@/lib/icons";
 	import { Switch } from "@/components/ui/switch";
 	import { Input } from "@/components/ui/input";
 	import { Label } from "@/components/ui/label";

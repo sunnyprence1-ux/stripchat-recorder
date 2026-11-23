@@ -14,6 +14,7 @@
     On finish, sets setup_done = true and navigates to the home page.
 -->
 <script setup lang="ts">
+import { Check } from "@/lib/icons";
 import { ref, computed, onMounted } from "vue";
 import { useRouter } from "vue-router";
 import { useI18n } from "vue-i18n";
@@ -141,9 +142,7 @@ async function finish() {
 									: 'bg-muted text-muted-foreground'
 						"
 					>
-						<svg v-if="i < step" class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
-							<polyline points="20 6 9 17 4 12" />
-						</svg>
+						<Check v-if="i < step" class="size-3.5" />
 						<span v-else>{{ i }}</span>
 					</div>
 					<div

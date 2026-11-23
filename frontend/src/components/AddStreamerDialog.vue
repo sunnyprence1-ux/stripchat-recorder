@@ -36,15 +36,47 @@
 	const username = ref("");
 	const loading = ref(false);
 
-	type LiveRoom = { username: string; thumbnail_url: string | null };
+	type LiveRoom = {
+		username: string;
+		thumbnail_url: string | null;
+		thumbnail_urls?: string[];
+		country?: string | null;
+		viewers?: number | null;
+	};
 	const tab = ref<"browse" | "manual">("browse");
 	const rooms = ref<LiveRoom[]>([]);
 	const nextOffset = ref<number | null>(0);
 	const browsing = ref(false);
 	const browseError = ref("");
 	const addingRoom = ref<string | null>(null);
-	const brokenImages = ref(new Set<string>());
+	const imageIndex = ref<Record<string, number>>({});
+	const search = ref("");
+	const country = ref("");
+	const hideAdded = ref(false);
+	const regionNames = typeof Intl.DisplayNames === "function"
+		? new Intl.DisplayNames(["en"], { type: "region" })
+		: null;
+
+	function countryName(value: string) {
+		return /^[a-z]{2}$/i.test(value) ? regionNames?.of(value.toUpperCase()) ?? value : value;
+	}
+
+	function thumbnail(room: LiveRoom) {
+		const choices = room.thumbnail_urls ?? (room.thumbnail_url ? [room.thumbnail_url] : []);
+		return choices[imageIndex.value[room.username] ?? 0];
+	}
 	const tracked = computed(() => new Set(store.streamers.map((entry) => entry.username.toLowerCase())));
+	const countries = computed(() => [...new Set(rooms.value.map((room) => room.country).filter((value): value is string => !!value))]
+		.sort((a, b) => countryName(a).localeCompare(countryName(b))));
+	const filteredRooms = computed(() => {
+		const query = search.value.trim().toLowerCase();
+		return rooms.value.filter((room) =>
+			(!query || room.username.toLowerCase().includes(query)) &&
+			(!country.value || room.country === country.value) &&
+			(!hideAdded.value || !tracked.value.has(room.username.toLowerCase()))
+		);
+	});
+
 	const controller = new AbortController();
 
 	async function loadRooms() {
@@ -156,16 +188,36 @@
 			</div>
 
 			<section v-if="tab === 'browse'" aria-label="Live rooms" class="grid gap-3">
-				<div v-if="rooms.length" class="grid grid-cols-2 gap-2 sm:grid-cols-3">
-					<article v-for="room in rooms" :key="room.username" class="min-w-0 overflow-hidden rounded-md border bg-card">
+				<div v-if="rooms.length" class="grid gap-2 sm:grid-cols-2">
+					<label class="grid gap-1 text-sm">Username
+						<Input v-model="search" type="search" placeholder="Filter by username" />
+					</label>
+					<label class="grid gap-1 text-sm">Country
+						<select v-model="country" :disabled="!countries.length" class="min-h-10 rounded-md border bg-card px-2">
+							<option value="">{{ countries.length ? "All countries" : "Country unavailable" }}</option>
+							<option v-for="value in countries" :key="value" :value="value">{{ countryName(value) }}</option>
+						</select>
+					</label>
+					<label class="flex min-h-10 items-center gap-2 text-sm sm:col-span-2">
+						<input v-model="hideAdded" type="checkbox" /> Hide already added rooms
+					</label>
+					<p class="text-xs text-muted-foreground sm:col-span-2" role="status">{{ filteredRooms.length }} of {{ rooms.length }} loaded rooms</p>
+				</div>
+				<div v-if="filteredRooms.length" class="grid grid-cols-2 gap-2 sm:grid-cols-3">
+					<article v-for="room in filteredRooms" :key="room.username" class="min-w-0 overflow-hidden rounded-md border bg-card">
 						<div class="grid aspect-video place-items-center overflow-hidden bg-muted">
-							<img v-if="room.thumbnail_url && !brokenImages.has(room.username)" :src="room.thumbnail_url"
+							<img v-if="thumbnail(room)" :key="thumbnail(room)" :src="thumbnail(room)"
 								alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer"
-								class="size-full object-cover" @error="brokenImages.add(room.username)" />
+								class="size-full object-cover" @error="imageIndex[room.username] = (imageIndex[room.username] ?? 0) + 1" />
 							<span v-else aria-hidden="true" class="font-mono text-muted-foreground">{{ room.username.slice(0, 2).toUpperCase() }}</span>
 						</div>
 						<div class="grid gap-2 p-2">
 							<h3 class="break-all text-sm font-semibold">{{ room.username }}</h3>
+							<p v-if="room.country || room.viewers != null" class="text-xs text-muted-foreground">
+								<span v-if="room.country">{{ countryName(room.country) }}</span>
+								<span v-if="room.country && room.viewers != null"> · </span>
+								<span v-if="room.viewers != null">{{ room.viewers.toLocaleString() }} viewers</span>
+							</p>
 							<Button size="sm" :disabled="!!addingRoom || tracked.has(room.username.toLowerCase())"
 								:aria-label="'Add ' + room.username" @click="addRoom(room)">
 								{{ tracked.has(room.username.toLowerCase()) ? 'Added' : addingRoom === room.username.toLowerCase() ? 'Adding…' : 'Add' }}
@@ -174,7 +226,9 @@
 					</article>
 				</div>
 				<p v-if="browseError" role="alert" class="text-sm text-muted-foreground">{{ browseError }}</p>
-				<p v-else-if="!browsing && !rooms.length" role="status" class="text-sm text-muted-foreground">No live rooms on this page.</p>
+				<p v-else-if="!browsing && !filteredRooms.length" role="status" class="text-sm text-muted-foreground">
+					{{ rooms.length ? "No loaded rooms match these filters." : "No live rooms on this page." }}
+				</p>
 				<Button v-if="nextOffset !== null" type="button" variant="outline" :disabled="browsing" @click="loadRooms">
 					{{ browsing ? 'Loading live rooms…' : browseError ? 'Retry' : 'Load more' }}
 				</Button>

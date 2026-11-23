@@ -284,7 +284,7 @@ async fn add_streamer(
 ) -> ApiResult<serde_json::Value> {
     let username = body.username.trim().to_lowercase();
     if username.is_empty() {
-        return Err(ApiError("用户名不能为空".into()));
+        return Err(ApiError("Username cannot be empty".into()));
     }
     let settings = s.app_state.get_settings();
     let api = crate::streaming::stripchat::StripchatApi::new_api_only(
@@ -488,7 +488,7 @@ async fn sync_mouflon_keys(AxumState(s): AxumState<ServerState>) -> ApiResult<se
         .mouflon_sync_url
         .as_deref()
         .filter(|u| !u.is_empty())
-        .ok_or_else(|| ApiError("未配置 mouflon_sync_url".into()))?
+        .ok_or_else(|| ApiError("No Mouflon sync URL is configured".into()))?
         .to_string();
     let token = settings.mouflon_sync_token.clone();
 
@@ -645,7 +645,7 @@ async fn test_module(Json(body): Json<ModuleTestBody>) -> ApiResult<serde_json::
             Some(m) => crate::postprocess::pipeline::run_module_test(&m, &body.params),
             None => crate::postprocess::pipeline::TestResult {
                 success: false,
-                message: format!("模块 '{}' 不存在", body.module_id),
+                message: format!("Module '{}' was not found", body.module_id),
                 logs: vec![],
             },
         }
@@ -653,7 +653,7 @@ async fn test_module(Json(body): Json<ModuleTestBody>) -> ApiResult<serde_json::
     .await
     .unwrap_or_else(|e| crate::postprocess::pipeline::TestResult {
         success: false,
-        message: format!("自检任务失败: {}", e),
+        message: format!("Self-test failed: {}", e),
         logs: vec![],
     });
 
@@ -712,13 +712,13 @@ async fn login_start(
             )
             .map_err(crate::core::error::AppError::Other),
             None => Err(crate::core::error::AppError::Other(format!(
-                "模块 '{}' 不存在",
+                "Module '{}' was not found",
                 body.module_id
             ))),
         }
     })
     .await
-    .map_err(|e| ApiError(format!("登录任务失败: {}", e)))??;
+    .map_err(|e| ApiError(format!("Sign-in failed: {}", e)))??;
 
     Ok(Json(serde_json::to_value(update).unwrap()))
 }
@@ -733,7 +733,7 @@ async fn login_input(Json(body): Json<LoginInputBody>) -> ApiResult<serde_json::
             .map_err(crate::core::error::AppError::Other)
     })
     .await
-    .map_err(|e| ApiError(format!("登录任务失败: {}", e)))??;
+    .map_err(|e| ApiError(format!("Sign-in failed: {}", e)))??;
 
     Ok(Json(serde_json::to_value(update).unwrap()))
 }
@@ -753,7 +753,7 @@ async fn login_cancel(Json(body): Json<LoginCancelBody>) -> ApiResult<serde_json
             .map_err(crate::core::error::AppError::Other)
     })
     .await
-    .map_err(|e| ApiError(format!("取消登录失败: {}", e)))??;
+    .map_err(|e| ApiError(format!("Could not cancel sign-in: {}", e)))??;
 
     Ok(Json(serde_json::json!({ "ok": true })))
 }
@@ -818,7 +818,7 @@ async fn run_postprocess(
 ) -> ApiResult<serde_json::Value> {
     let pipeline = s.app_state.get_pipeline();
     if pipeline.nodes.is_empty() {
-        return Err(ApiError("后处理流水线为空".into()));
+        return Err(ApiError("The post-processing workflow is empty".into()));
     }
     let video_path = std::path::PathBuf::from(&body.path);
     let emitter = Arc::clone(&s.emitter);
@@ -852,7 +852,7 @@ async fn run_postprocess_batch(
 ) -> ApiResult<serde_json::Value> {
     let pipeline = s.app_state.get_pipeline();
     if pipeline.nodes.is_empty() {
-        return Err(ApiError("后处理流水线为空".into()));
+        return Err(ApiError("The post-processing workflow is empty".into()));
     }
     for path in body.paths {
         let video_path = std::path::PathBuf::from(&path);

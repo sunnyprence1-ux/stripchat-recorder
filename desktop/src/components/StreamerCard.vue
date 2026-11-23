@@ -17,6 +17,7 @@
         toggle-auto  - 用户切换自动录制开关 / User toggles auto-record switch
 -->
 <script setup lang="ts">
+	import { More, Record, Square } from "@/lib/icons";
 	import type { StreamerEntry } from "../stores/streamers";
 	import { Button } from "@/components/ui/button";
 	import { Switch } from "@/components/ui/switch";
@@ -68,9 +69,9 @@
 			</p>
 		</div>
 		<div class="signal-actions">
-			<Button v-if="streamer.is_recording" variant="destructive" @click="emit('stop')">■ Stop</Button>
-			<Button v-else :disabled="!streamer.is_recordable" :title="!streamer.is_recordable ? streamer.status : undefined" @click="emit('start')">● Record</Button>
-			<Button size="icon" variant="outline" :aria-expanded="detailsOpen" :aria-label="'Options for ' + streamer.username" @click="detailsOpen = !detailsOpen">⋯</Button>
+			<Button v-if="streamer.is_recording" variant="destructive" @click="emit('stop')"><Square /> Stop</Button>
+			<Button v-else :disabled="!streamer.is_recordable" :title="!streamer.is_recordable ? streamer.status : undefined" @click="emit('start')"><Record /> Record</Button>
+			<Button size="icon" variant="outline" :aria-expanded="detailsOpen" :aria-label="'Options for ' + streamer.username" @click="detailsOpen = !detailsOpen"><More /></Button>
 		</div>
 		<div v-if="detailsOpen" class="signal-row-details">
 			<div class="flex items-center gap-2">
