@@ -113,14 +113,16 @@ async function finish() {
 <template>
 	<!-- 全屏向导：移动端用 dvh + 安全区内边距，内容可正常滚动
 	     Full-screen wizard: dvh + safe-area padding on mobile, content stays scrollable -->
-	<div class="min-h-dvh flex items-center justify-center bg-background px-4 py-8 pb-[calc(2rem+env(safe-area-inset-bottom))] md:p-6">
-		<div class="w-full max-w-lg flex flex-col gap-6 md:gap-8">
+	<div class="min-h-dvh flex items-center justify-center bg-[#26231e] px-4 py-8 pb-[calc(2rem+env(safe-area-inset-bottom))] md:p-8">
+		<div class="w-full max-w-3xl grid md:grid-cols-[0.8fr_1.2fr] overflow-hidden rounded-2xl border border-white/10 bg-card shadow-2xl">
+			<aside class="hidden md:flex flex-col justify-between bg-[#302c25] p-8 text-[#eee7d8]"><div><span class="grid size-11 place-items-center rounded-lg bg-[#d88742] text-[#261c12] font-black text-xs">SR</span><p class="mt-8 text-xs font-bold uppercase tracking-[0.2em] text-[#e6a364]">Capture studio</p><h2 class="mt-3 text-3xl font-bold">Set up your recording space.</h2></div><p class="text-xs text-white/50">Stripchat Recorder · English edition</p></aside>
+			<div class="w-full p-5 md:p-9 flex flex-col gap-6">
 
 			<!-- 标题 / Title -->
 			<div class="flex flex-col gap-1.5">
 				<div class="flex items-center gap-2.5">
-					<span class="w-3 h-3 rounded-full bg-destructive shrink-0" />
-					<span class="text-lg font-bold">StripchatRecorder</span>
+					<span class="w-3 h-3 rounded-full bg-primary shrink-0" />
+					<span class="text-lg font-bold">Capture studio</span>
 				</div>
 				<h1 class="text-2xl font-bold mt-1">{{ t("setup.title") }}</h1>
 				<p class="text-sm text-muted-foreground">{{ t("setup.subtitle") }}</p>
@@ -220,6 +222,7 @@ async function finish() {
 				</div>
 			</div>
 
+			</div>
 		</div>
 	</div>
 </template>

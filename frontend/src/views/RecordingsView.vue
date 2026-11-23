@@ -821,7 +821,7 @@
 </script>
 
 <template>
-	<div class="flex flex-col">
+	<div class="library-page flex flex-col gap-4">
 		<!-- 手动发送到 Telegram / Manual send to Telegram -->
 		<SendToTelegramDialog
 			v-if="tgDialogPaths"
@@ -889,7 +889,7 @@
 
 		<header
 			ref="headerEl"
-			class="flex flex-col gap-3 md:flex-row md:items-start md:justify-between md:gap-4 shrink-0 pb-4 bg-background sticky top-0 z-20"
+			class="flex flex-col gap-3 md:flex-row md:items-start md:justify-between md:gap-4 shrink-0 p-4 md:p-5 bg-card border border-border rounded-xl sticky top-0 z-20"
 		>
 			<div class="flex-1 min-w-0">
 				<h1 class="text-xl font-bold mb-0.5">{{ t("recordings.title") }}</h1>

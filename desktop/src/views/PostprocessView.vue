@@ -435,8 +435,8 @@
 </script>
 
 <template>
-	<div class="flex flex-col gap-6">
-		<header class="flex items-start justify-between">
+	<div class="pipeline-page flex flex-col gap-6">
+		<header class="flex flex-wrap items-end justify-between gap-3 border-b border-border pb-5">
 			<div>
 				<h1 class="text-xl font-bold mb-0.5">{{ t("postprocess.title") }}</h1>
 				<p class="text-sm text-muted-foreground">
@@ -469,7 +469,7 @@
 				@dragend="onDragEnd"
 			>
 				<div
-					class="border-2 rounded-xl p-4 bg-card transition-opacity"
+					class="border border-border rounded-xl p-4 md:p-5 bg-card shadow-sm transition-opacity"
 					:class="[
 						!node.enabled && 'opacity-50',
 						dragIndex === idx ? 'opacity-30' : '',

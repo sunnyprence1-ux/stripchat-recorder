@@ -16,10 +16,11 @@
     - Listening for startup-warnings to handle non-existent streamers and orphaned post-processing records
 -->
 <script setup lang="ts">
-	import { onMounted, onUnmounted, ref } from "vue";
+	import { computed, onMounted, onUnmounted, ref } from "vue";
 	import { RouterView, useRouter, useRoute } from "vue-router";
 	import NotifyLayer from "./components/NotifyLayer.vue";
 	import { Button } from "@/components/ui/button";
+	import { Activity, Users, Video, Workflow, Search, Settings } from "@lucide/vue";
 	import { call, on, onSseReconnect, onSseDisconnect } from "@/lib/api";
 	import { useNotify } from "@/composables/useNotify";
 	import { toast as sonnerToast } from "vue-sonner";
@@ -38,14 +39,16 @@
 
 	const mainScrollEl = ref<HTMLElement | null>(null);
 	useScrollbar(mainScrollEl);
+	const pageTitle = computed(() => navItems.find((item) => item.to === route.path)?.labelKey ?? "nav.streamers");
+	const recordingCount = computed(() => streamersStore.streamers.filter((s) => s.is_recording).length);
 
 	/** 侧边栏导航项配置（桌面版无流转发）/ Sidebar navigation items (desktop: no relay) */
 	const navItems = [
-		{ to: "/", labelKey: "nav.streamers" },
-		{ to: "/recordings", labelKey: "nav.recordings" },
-		{ to: "/postprocess", labelKey: "nav.postprocess" },
-		{ to: "/finder", labelKey: "nav.finder" },
-		{ to: "/settings", labelKey: "nav.settings" },
+		{ to: "/", labelKey: "nav.streamers", icon: Users },
+		{ to: "/recordings", labelKey: "nav.recordings", icon: Video },
+		{ to: "/postprocess", labelKey: "nav.postprocess", icon: Workflow },
+		{ to: "/finder", labelKey: "nav.finder", icon: Search },
+		{ to: "/settings", labelKey: "nav.settings", icon: Settings },
 	];
 
 	/**
@@ -206,39 +209,20 @@
 		</div>
 
 		<!-- 正常布局：侧边栏 + 内容区 / Normal layout: sidebar + content -->
-		<div v-else key="main" class="flex h-screen overflow-hidden app-frame">
-			<aside
-				class="w-60 shrink-0 bg-sidebar border-r border-sidebar-border flex flex-col p-4 gap-2"
-			>
-				<div
-					class="flex items-center gap-3 px-2 py-5 mb-3 border-b border-sidebar-border"
-				>
-					<span class="w-8 h-8 rounded-xl bg-primary text-primary-foreground grid place-items-center text-xs font-black shrink-0">SR</span>
-					<span class="text-sm font-bold tracking-tight text-sidebar-foreground">Stripchat<br><span class="text-[10px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Control room</span></span>
-				</div>
-				<nav class="flex flex-col gap-0.5">
-					<Button
-						v-for="item in navItems"
-						:key="item.to"
-						variant="ghost"
-						class="w-full h-10 justify-start rounded-xl px-3 text-sm font-medium"
-						:class="
-							route.path === item.to
-								? 'bg-sidebar-accent text-sidebar-accent-foreground font-semibold'
-								: 'text-sidebar-foreground/70 hover:text-sidebar-foreground hover:bg-sidebar-accent/50'
-						"
-						@click="router.push(item.to)"
-					>
-						{{ t(item.labelKey) }}
-					</Button>
+		<div v-else key="main" class="app-shell-height app-frame grid grid-cols-1 md:grid-cols-[68px_minmax(0,1fr)] overflow-hidden">
+			<aside class="hidden md:flex border-r border-white/10 bg-[#26231e] flex-col items-center py-5 text-[#b7afa0]">
+				<button class="grid size-10 place-items-center rounded-lg bg-[#d88742] text-[#261c12] font-black text-xs" @click="router.push('/')">SR</button>
+				<nav class="mt-10 flex flex-col gap-3">
+					<button v-for="item in navItems" :key="item.to" type="button" :title="t(item.labelKey)" class="grid size-10 place-items-center rounded-lg" :class="route.path === item.to ? 'bg-[#d88742] text-[#261c12]' : 'hover:bg-white/10 hover:text-white'" @click="router.push(item.to)"><component :is="item.icon" class="size-[18px]" /></button>
 				</nav>
-				<div class="mt-auto rounded-xl border border-sidebar-border bg-background/70 px-3 py-3 text-[11px] text-muted-foreground">
-					<div class="flex items-center gap-2 font-semibold text-sidebar-foreground"><span class="size-1.5 rounded-full bg-emerald-500" /> RECORDER READY</div>
-					<div class="mt-1">English control surface</div>
-				</div>
+				<div class="mt-auto grid size-9 place-items-center rounded-full border border-emerald-400/30 text-emerald-400"><Activity class="size-4" /></div>
 			</aside>
-			<main class="flex-1 overflow-hidden">
-				<div ref="mainScrollEl" class="h-full overflow-y-auto p-8 scrollbar-overlay workspace-surface">
+			<main class="min-w-0 overflow-hidden bg-[#f0eee8] dark:bg-[#191815]">
+				<header class="h-[4.5rem] md:h-20 border-b border-[#ded9cc] dark:border-white/8 bg-[#faf9f5] dark:bg-[#211f1b] px-4 md:px-8 flex items-center justify-between gap-2">
+					<div class="flex items-center gap-3 min-w-0"><button class="md:hidden grid size-9 shrink-0 place-items-center rounded-lg bg-[#d88742] text-[#261c12] font-black text-xs" @click="router.push('/')">SR</button><div class="min-w-0"><p class="text-[9px] md:text-[10px] tracking-[0.16em] font-bold uppercase text-[#a16c3e]">Studio / Live operations</p><h1 class="truncate text-base md:text-lg font-bold">{{ t(pageTitle) }}</h1></div></div>
+					<div class="flex items-center gap-2 rounded-md bg-[#eeece5] dark:bg-white/5 px-3 py-1.5 text-xs"><span class="size-1.5 rounded-full bg-emerald-500" />{{ recordingCount }} recording</div>
+				</header>
+				<div ref="mainScrollEl" class="h-[calc(100%-4.5rem)] md:h-[calc(100%-5rem)] overflow-y-auto p-4 md:p-8 pb-24 md:pb-8 scrollbar-overlay workspace-surface">
 					<RouterView v-slot="{ Component }">
 						<Transition name="page" mode="out-in">
 							<component :is="Component" :key="route.path" />
@@ -246,6 +230,9 @@
 					</RouterView>
 				</div>
 			</main>
+			<nav class="md:hidden fixed inset-x-3 bottom-3 z-40 rounded-xl border border-white/10 bg-[#26231e] shadow-xl" :style="{ paddingBottom: 'env(safe-area-inset-bottom)' }">
+				<div class="flex items-stretch"> <button v-for="item in navItems" :key="item.to" type="button" class="flex h-14 min-w-0 flex-1 flex-col items-center justify-center gap-1 text-[9px]" :class="route.path === item.to ? 'text-[#e9a15b]' : 'text-[#b7afa0]'" :aria-label="t(item.labelKey)" @click="router.push(item.to)"><component :is="item.icon" class="size-4"/><span class="max-w-full truncate px-0.5">{{ t(item.labelKey) }}</span></button></div>
+			</nav>
 			<NotifyLayer />
 		</div>
 

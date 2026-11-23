@@ -421,7 +421,7 @@ async function openSimilarDialog(m: ModelResult) {
 </script>
 
 <template>
-  <div class="flex flex-col gap-5" @paste.capture="onPaste">
+  <div class="finder-page flex flex-col gap-5" @paste.capture="onPaste">
     <!-- Header -->
     <header>
       <h1 class="text-xl font-bold mb-0.5">{{ t("finder.title") }}</h1>
@@ -451,7 +451,7 @@ async function openSimilarDialog(m: ModelResult) {
 
       <!-- Drop zone -->
       <div
-        class="relative border-2 border-dashed rounded-lg transition-colors cursor-pointer"
+        class="relative border-2 border-dashed rounded-xl bg-card min-h-40 transition-colors cursor-pointer"
         :class="dragOver ? 'border-primary bg-primary/5' : 'border-border hover:border-primary/50'"
         @dragover.prevent="dragOver = true"
         @dragleave="dragOver = false"
@@ -498,11 +498,11 @@ async function openSimilarDialog(m: ModelResult) {
       <!-- Face results -->
       <template v-if="faceResults.length > 0">
         <p class="text-sm text-muted-foreground">{{ t("finder.face.results", { count: faceResults.length }) }}</p>
-        <div class="grid grid-cols-[repeat(auto-fill,minmax(min(100%,240px),1fr))] gap-3">
+        <div class="grid grid-cols-[repeat(auto-fill,minmax(min(100%,260px),1fr))] gap-4">
           <div
             v-for="(p, i) in faceResults"
             :key="i"
-            class="flex gap-3 p-3 rounded-lg border border-border hover:border-primary/50 hover:bg-accent/30 transition-colors"
+            class="flex gap-3 p-4 rounded-xl border border-border bg-card hover:border-primary/50 hover:bg-accent/30 transition-colors"
           >
             <a :href="p.urls.externalProfile" target="_blank" rel="noopener noreferrer" class="shrink-0">
               <img
@@ -588,12 +588,12 @@ async function openSimilarDialog(m: ModelResult) {
       <!-- Name results -->
       <template v-if="nameResults.length > 0">
         <p class="text-sm text-muted-foreground">{{ t("finder.name.results", { count: nameResults.length }) }}</p>
-        <div class="grid grid-cols-[repeat(auto-fill,minmax(min(100%,240px),1fr))] gap-3">
+        <div class="grid grid-cols-[repeat(auto-fill,minmax(min(100%,260px),1fr))] gap-4">
           <Button
             v-for="(m, i) in nameResults"
             :key="i"
             variant="outline"
-            class="flex gap-3 p-3 rounded-lg border border-border hover:border-primary/50 hover:bg-accent/30 transition-colors text-left w-full h-auto justify-start"
+            class="flex gap-3 p-4 rounded-xl border border-border bg-card hover:border-primary/50 hover:bg-accent/30 transition-colors text-left w-full h-auto justify-start"
             :disabled="!m.persons[0]?.urls.faceImage"
             @click="openSimilarDialog(m)"
           >

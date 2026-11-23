@@ -188,7 +188,7 @@
 </script>
 
 <template>
-	<div class="flex flex-col gap-5">
+	<div class="relay-page flex flex-col gap-6">
 		<header class="flex flex-wrap items-start justify-between gap-3">
 			<div class="min-w-0">
 				<h1 class="text-xl font-bold mb-0.5">{{ t("relay.title") }}</h1>
@@ -199,7 +199,7 @@
 		</header>
 
 		<!-- 转发流提示 / Relay hint -->
-		<div class="rounded-lg border border-blue-900/40 bg-blue-950/20 px-4 py-3 text-sm text-blue-300/80">
+		<div class="rounded-xl border border-border bg-card px-4 py-4 md:px-6 md:py-5 text-sm">
 			<p>{{ t("relay.hint") }}</p>
 			<p class="mt-1 font-mono text-xs text-blue-400/60 break-all">
 				{{ exampleUrl }}
@@ -221,12 +221,12 @@
 
 		<div
 			v-else
-			class="grid grid-cols-[repeat(auto-fill,minmax(min(100%,300px),1fr))] gap-3.5"
+			class="grid grid-cols-[repeat(auto-fill,minmax(min(100%,320px),1fr))] gap-4"
 		>
 			<Card
 				v-for="session in [...sessions].sort((a, b) => a.username.localeCompare(b.username))"
 				:key="session.username"
-				class="overflow-hidden py-0"
+				class="overflow-hidden rounded-xl border-border bg-card py-0 shadow-sm"
 				:class="{
 					'border-green-900/50': session.stream_state.type === 'live',
 					'border-blue-900/50': session.stream_state.type === 'connecting',
@@ -281,7 +281,7 @@
 					<!-- 流地址 + 复制按钮 / Stream URL + copy button -->
 					<div class="flex items-center gap-2">
 						<div
-							class="flex-1 min-w-0 text-xs font-mono text-blue-400/70 bg-blue-950/20 rounded px-2 py-2 md:py-1.5 truncate select-all"
+							class="flex-1 min-w-0 text-xs font-mono text-primary bg-muted rounded-md px-2 py-2 md:py-1.5 truncate select-all"
 							:title="getStreamUrl(session)"
 						>
 							{{ getStreamUrl(session) }}

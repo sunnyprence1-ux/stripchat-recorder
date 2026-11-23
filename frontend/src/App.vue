@@ -216,23 +216,23 @@
 		<!-- 正常布局：侧边栏（≥md）+ 内容区 + 移动端底部标签栏
 		     Normal layout: sidebar (≥md) + content + mobile bottom tab bar -->
 		<div v-else key="main" class="app-shell-height app-frame grid grid-cols-[68px_minmax(0,1fr)] overflow-hidden">
-			<aside class="hidden md:flex border-r border-white/10 bg-[#0a0e16] flex-col items-center py-5 text-slate-400">
-				<button class="grid size-9 place-items-center rounded-xl bg-cyan-400 text-slate-950 font-black text-xs" @click="router.push('/')">SR</button>
+			<aside class="hidden md:flex border-r border-white/10 bg-[#26231e] flex-col items-center py-5 text-[#b7afa0]">
+				<button class="grid size-10 place-items-center rounded-lg bg-[#d88742] text-[#261c12] font-black text-xs" @click="router.push('/')">SR</button>
 				<nav class="mt-10 flex flex-col gap-3">
-					<button v-for="item in navItems" :key="item.to" type="button" :title="t(item.labelKey)" class="grid size-10 place-items-center rounded-xl transition-colors" :class="route.path === item.to ? 'bg-cyan-400 text-slate-950 shadow-lg shadow-cyan-400/20' : 'hover:bg-white/10 hover:text-white'" @click="router.push(item.to)">
+					<button v-for="item in navItems" :key="item.to" type="button" :title="t(item.labelKey)" class="grid size-10 place-items-center rounded-lg transition-colors" :class="route.path === item.to ? 'bg-[#d88742] text-[#261c12]' : 'hover:bg-white/10 hover:text-white'" @click="router.push(item.to)">
 						<component :is="item.icon" class="size-[18px]" />
 					</button>
 				</nav>
 				<div class="mt-auto grid size-9 place-items-center rounded-full border border-emerald-400/30 text-emerald-400" title="Recorder online"><Activity class="size-4" /></div>
 			</aside>
-			<main class="min-w-0 overflow-hidden bg-[#f4f7fb] dark:bg-[#0e1420]">
-				<header class="h-[4.5rem] md:h-20 border-b border-slate-200 dark:border-white/8 bg-white dark:bg-[#111927] px-4 md:px-8 flex items-center justify-between gap-4">
+			<main class="min-w-0 overflow-hidden bg-[#f0eee8] dark:bg-[#191815]">
+				<header class="h-[4.5rem] md:h-20 border-b border-[#ded9cc] dark:border-white/8 bg-[#faf9f5] dark:bg-[#211f1b] px-4 md:px-8 flex items-center justify-between gap-4">
 					<div class="flex items-center gap-3 min-w-0">
 						<div class="md:hidden grid size-9 place-items-center rounded-xl bg-cyan-400 text-slate-950 font-black text-xs">SR</div>
-						<div class="min-w-0"><p class="text-[10px] tracking-[0.2em] font-bold uppercase text-slate-400">Studio / Live operations</p><h1 class="truncate text-base md:text-lg font-bold text-slate-900 dark:text-white">{{ t(pageTitle) }}</h1></div>
+						<div class="min-w-0"><p class="text-[10px] tracking-[0.2em] font-bold uppercase text-[#a16c3e]">Studio / Live operations</p><h1 class="truncate text-base md:text-lg font-bold text-slate-900 dark:text-white">{{ t(pageTitle) }}</h1></div>
 					</div>
 					<div class="flex items-center gap-2 shrink-0">
-						<div class="hidden sm:flex items-center gap-2 rounded-full bg-slate-100 dark:bg-white/5 px-3 py-1.5 text-xs font-medium"><span class="size-1.5 rounded-full bg-emerald-500" /> {{ recordingCount }} recording</div>
+						<div class="hidden sm:flex items-center gap-2 rounded-md bg-[#eeece5] dark:bg-white/5 px-3 py-1.5 text-xs font-medium"><span class="size-1.5 rounded-full bg-emerald-500" /> {{ recordingCount }} recording</div>
 					</div>
 				</header>
 				<div ref="mainScrollEl" class="h-[calc(100%-4.5rem)] md:h-[calc(100%-5rem)] overflow-y-auto overflow-x-hidden p-4 md:p-8 pb-24 scrollbar-overlay workspace-surface">
@@ -246,7 +246,7 @@
 
 			<!-- 移动端底部标签栏（<md），固定在安全区之上 / Mobile bottom tab bar (<md), above the safe area -->
 			<nav
-				class="md:hidden fixed inset-x-3 bottom-3 z-40 rounded-2xl border border-white/10 bg-[#101827] shadow-2xl shadow-black/30"
+				class="md:hidden fixed inset-x-3 bottom-3 z-40 rounded-xl border border-white/10 bg-[#26231e] shadow-xl"
 				:style="{
 					paddingBottom: 'env(safe-area-inset-bottom)',
 					paddingLeft: 'env(safe-area-inset-left)',
@@ -259,7 +259,7 @@
 						:key="item.to"
 						type="button"
 						class="flex flex-1 min-w-0 h-14 flex-col items-center justify-center gap-0.5 px-0 text-[10px] leading-tight tracking-tight transition-colors"
-						:class="route.path === item.to ? 'text-cyan-400 font-semibold' : 'text-slate-400 active:text-white'"
+						:class="route.path === item.to ? 'text-[#e9a15b] font-semibold' : 'text-[#b7afa0] active:text-white'"
 						:aria-current="route.path === item.to ? 'page' : undefined"
 						:aria-label="t(item.labelKey)"
 						@click="router.push(item.to)"

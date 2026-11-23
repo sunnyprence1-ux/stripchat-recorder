@@ -313,13 +313,14 @@
 </script>
 
 <template>
-	<div class="flex flex-col gap-5 max-w-160">
-		<h1 class="text-xl font-bold">{{ t("settings.title") }}</h1>
+	<div class="settings-page grid grid-cols-1 xl:grid-cols-[220px_minmax(0,1fr)] gap-6 max-w-6xl">
+		<aside class="hidden xl:block"><p class="text-xs uppercase tracking-widest text-primary font-bold">Preferences</p><h1 class="mt-2 text-2xl font-bold">{{ t("settings.title") }}</h1><p class="mt-2 text-sm text-muted-foreground">Tune capture, network and integrations.</p><div class="mt-6 space-y-2 text-sm text-muted-foreground"><div>Recording</div><div>Network</div><div>Decryption</div></div></aside>
+		<div class="flex flex-col gap-5 min-w-0">
 
 		<div v-if="store.loading" class="text-muted-foreground">{{ t("settings.loading") }}</div>
 
-		<form v-else class="flex flex-col gap-7">
-			<section class="flex flex-col gap-3.5">
+		<form v-else class="flex flex-col gap-4 min-w-0">
+			<section class="flex flex-col gap-3.5 rounded-xl border border-border bg-card p-4 md:p-6">
 				<h2
 					class="text-xs font-bold uppercase tracking-widest text-muted-foreground pb-2 border-b"
 				>
@@ -502,7 +503,7 @@
 				</div>
 			</section>
 
-			<section class="flex flex-col gap-3.5">
+			<section class="flex flex-col gap-3.5 rounded-xl border border-border bg-card p-4 md:p-6">
 				<h2
 					class="text-xs font-bold uppercase tracking-widest text-muted-foreground pb-2 border-b"
 				>
@@ -558,7 +559,7 @@
 				</div>
 			</section>
 
-			<section class="flex flex-col gap-3.5">
+			<section class="flex flex-col gap-3.5 rounded-xl border border-border bg-card p-4 md:p-6">
 				<h2
 					class="text-xs font-bold uppercase tracking-widest text-muted-foreground pb-2 border-b"
 				>
@@ -672,5 +673,6 @@
 				<p v-if="keyError" class="text-xs text-destructive">{{ keyError }}</p>
 			</section>
 		</form>
+		</div>
 	</div>
 </template>
