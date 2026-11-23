@@ -10,7 +10,6 @@
 -->
 <script setup lang="ts">
 	import { computed, onMounted, ref } from "vue";
-	import { Radio, CircleDotDashed, UsersRound } from "@lucide/vue";
 	import { useStreamersStore } from "../stores/streamers";
 	import type { StreamerEntry } from "../stores/streamers";
 	import { useNotify } from "../composables/useNotify";
@@ -42,8 +41,18 @@
 		store.streamers.filter((s) => s.is_recording),
 	);
 	const onlineCount = computed(() => store.streamers.filter((s) => s.is_online).length);
-	const totalViewers = computed(() => store.streamers.reduce((total, s) => total + (s.is_online ? s.viewers : 0), 0));
 	const sortedStreamers = computed(() => [...store.streamers].sort((a, b) => a.username.localeCompare(b.username)));
+
+	const filters = ["All", "Live", "Recording", "Offline"] as const;
+	const filter = ref<(typeof filters)[number]>("All");
+	const visibleStreamers = computed(() => sortedStreamers.value.filter((entry) => {
+		switch (filter.value) {
+			case "Live": return entry.is_online;
+			case "Recording": return entry.is_recording;
+			case "Offline": return !entry.is_online;
+			default: return true;
+		}
+	}));
 
 	onMounted(async () => {
 		store.initListeners();
@@ -243,24 +252,22 @@
 </script>
 
 <template>
-	<div class="flex flex-col gap-7">
-		<section class="rounded-2xl bg-[#302c25] p-5 md:p-7 text-white overflow-hidden relative">
-			<div class="absolute -right-16 -top-20 size-64 rounded-full border-[28px] border-[#e6a364]/10" />
-			<div class="relative flex flex-wrap items-end justify-between gap-5">
-				<div><p class="text-xs uppercase tracking-[0.18em] font-bold text-[#e6a364]">Recording desk</p><h2 class="mt-2 text-2xl md:text-3xl font-bold tracking-tight">Your stream watchlist</h2><p class="mt-2 max-w-lg text-sm text-white/65">Monitor live rooms, start a capture, and keep your recordings moving.</p></div>
-				<Button class="rounded-lg bg-[#d88742] text-[#261c12] hover:bg-[#e6a364]" @click="showAdd = true">{{ t("home.addStreamer") }}</Button>
+	<section class="signal-watchlist">
+		<header class="signal-watch-header">
+			<h1>Watchlist</h1>
+			<Button @click="showAdd = true">+ {{ t("home.addStreamer") }}</Button>
+		</header>
+		<dl class="signal-metrics">
+			<div><dt>Tracked</dt><dd>{{ store.streamers.length }}</dd></div>
+			<div><dt>Live</dt><dd>{{ onlineCount }}</dd></div>
+			<div><dt>Recording</dt><dd>{{ stopAllTargets.length }}</dd></div>
+		</dl>
+		<div class="signal-toolbar">
+			<div class="signal-filters" role="group" aria-label="Filter watchlist">
+				<button v-for="option in filters" :key="option" type="button"
+					:aria-pressed="filter === option" @click="filter = option">{{ option }}</button>
 			</div>
-		</section>
-
-		<section class="grid grid-cols-2 lg:grid-cols-3 gap-3">
-			<div class="rounded-2xl border border-[#e5dfd2] bg-[#faf9f5] p-4 dark:border-white/8 dark:bg-[#211f1b]"><div class="flex items-center justify-between text-muted-foreground"><span class="text-xs font-bold uppercase tracking-wider">Watching</span><UsersRound class="size-4 text-[#bd7c42]" /></div><p class="mt-3 text-2xl font-bold">{{ store.streamers.length }}</p><p class="text-xs text-muted-foreground">tracked rooms</p></div>
-			<div class="rounded-2xl border border-[#e5dfd2] bg-[#faf9f5] p-4 dark:border-white/8 dark:bg-[#211f1b]"><div class="flex items-center justify-between text-muted-foreground"><span class="text-xs font-bold uppercase tracking-wider">Live now</span><Radio class="size-4 text-emerald-600" /></div><p class="mt-3 text-2xl font-bold">{{ onlineCount }}</p><p class="text-xs text-muted-foreground">{{ totalViewers.toLocaleString() }} viewers</p></div>
-			<div class="col-span-2 lg:col-span-1 rounded-2xl border border-[#e5dfd2] bg-[#faf9f5] p-4 dark:border-white/8 dark:bg-[#211f1b]"><div class="flex items-center justify-between text-muted-foreground"><span class="text-xs font-bold uppercase tracking-wider">Capturing</span><CircleDotDashed class="size-4 text-rose-600" /></div><p class="mt-3 text-2xl font-bold">{{ stopAllTargets.length }}</p><p class="text-xs text-muted-foreground">active recordings</p></div>
-		</section>
-
-		<header class="flex flex-wrap items-center justify-between gap-3">
-			<div><h2 class="text-lg font-bold">Streamers</h2><p class="text-sm text-muted-foreground">{{ t("home.subtitle", { total: store.streamers.length, recording: stopAllTargets.length }) }}</p></div>
-			<div v-if="store.streamers.length > 0" class="flex flex-wrap items-center gap-2 shrink-0">
+			<div v-if="store.streamers.length > 0" class="flex flex-wrap items-center gap-2">
 				<Button
 					variant="outline"
 					size="sm"
@@ -278,36 +285,16 @@
 					{{ t("home.stopAll", { count: stopAllTargets.length }) }}
 				</Button>
 			</div>
-		</header>
-
-		<div
-			v-if="store.loading && store.streamers.length === 0"
-			class="text-center text-muted-foreground py-16"
-		>
-			{{ t("home.loadingStreamers") }}
 		</div>
-
-		<div
-			v-else-if="store.streamers.length === 0"
-			class="text-center text-muted-foreground py-16 flex flex-col items-center gap-3"
-		>
-			<p>{{ t("home.noStreamers") }}</p>
-			<Button @click="showAdd = true">{{ t("home.addFirst") }}</Button>
-		</div>
-
-		<div
-			v-else
-			class="grid grid-cols-[repeat(auto-fill,minmax(min(100%,280px),1fr))] gap-4"
-		>
-			<StreamerCard
-				v-for="s in sortedStreamers"
-				:key="s.username"
-				:streamer="s"
+		<p v-if="store.loading && !store.streamers.length" class="signal-empty" role="status">{{ t("home.loadingStreamers") }}</p>
+		<p v-else-if="!store.streamers.length" class="signal-empty">{{ t("home.noStreamers") }}</p>
+		<p v-else-if="!visibleStreamers.length" class="signal-empty" role="status">No streams match this filter.</p>
+		<div v-else class="signal-rundown">
+			<StreamerCard v-for="s in visibleStreamers" :key="s.username" :streamer="s"
 				@remove="handleRemove(s.username)"
 				@toggle-auto="handleToggleAuto(s.username, s, $event)"
 				@start="handleStart(s.username)"
-				@stop="handleStop(s.username)"
-			/>
+				@stop="handleStop(s.username)" />
 		</div>
 
 		<AddStreamerDialog
@@ -315,6 +302,5 @@
 			@close="showAdd = false"
 			@added="showAdd = false"
 		/>
-	</div>
+	</section>
 </template>
-

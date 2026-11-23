@@ -111,9 +111,9 @@ async function finish() {
 </script>
 
 <template>
-	<div class="min-h-screen flex items-center justify-center bg-[#26231e] p-4 md:p-8">
+	<div class="min-h-screen flex items-center justify-center bg-[#101b15] p-4 md:p-8">
 		<div class="w-full max-w-3xl grid md:grid-cols-[0.8fr_1.2fr] overflow-hidden rounded-2xl border border-white/10 bg-card shadow-2xl">
-			<aside class="hidden md:flex flex-col justify-between bg-[#302c25] p-8 text-[#eee7d8]"><div><span class="grid size-11 place-items-center rounded-lg bg-[#d88742] text-[#261c12] font-black text-xs">SR</span><p class="mt-8 text-xs font-bold uppercase tracking-[0.2em] text-[#e6a364]">Capture studio</p><h2 class="mt-3 text-3xl font-bold">Set up your recording space.</h2></div><p class="text-xs text-white/50">Stripchat Recorder · English edition</p></aside>
+			<aside class="hidden md:flex flex-col justify-between bg-[#17241e] p-8 text-[#eef2e9]"><div><span class="grid size-11 place-items-center rounded-lg bg-[#c2f368] text-[#142007] font-black text-xs">SR</span><p class="mt-8 text-xs font-bold uppercase tracking-[0.2em] text-[#c2f368]">Capture studio</p><h2 class="mt-3 text-3xl font-bold">Set up your recording space.</h2></div><p class="text-xs text-white/50">Stripchat Recorder · English edition</p></aside>
 			<div class="w-full p-5 md:p-9 flex flex-col gap-6 md:gap-8">
 
 			<!-- 标题 / Title -->

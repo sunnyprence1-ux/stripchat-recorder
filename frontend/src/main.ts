@@ -12,6 +12,7 @@ import App from "./App.vue";
 import router from "./router";
 import i18n from "./i18n";
 import "./style.css";
+import "./signal-room.css";
 import "vue-sonner/style.css";
 
 // 修复第三方库（reka-ui）未将 wheel/touchstart 事件标记为 passive 的问题

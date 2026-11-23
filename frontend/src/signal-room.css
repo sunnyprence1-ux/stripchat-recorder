@@ -1,0 +1,140 @@
+:root:root {
+  color-scheme: dark;
+  --background: #0e1712;
+  --foreground: #eef2e9;
+  --card: #17241e;
+  --card-foreground: #eef2e9;
+  --popover: #182820;
+  --popover-foreground: #eef2e9;
+  --primary: #c2f368;
+  --primary-foreground: #142007;
+  --secondary: #26382e;
+  --secondary-foreground: #eef2e9;
+  --muted: #223229;
+  --muted-foreground: #adbbb1;
+  --accent: #294235;
+  --accent-foreground: #eef2e9;
+  --border: #3c5145;
+  --input: #4a6253;
+  --ring: #c2f368;
+  --destructive: #bf4039;
+}
+
+.signal-watchlist { display: grid; gap: 1rem; }
+.signal-watch-header, .signal-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: .75rem;
+}
+.signal-watch-header h1 { font-size: clamp(1.85rem, 5vw, 3rem); font-weight: 720; line-height: 1.05; }
+.signal-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  border-block: 1px solid var(--border);
+  padding-block: .7rem;
+}
+.signal-metrics div { padding-inline: clamp(.5rem, 2vw, 1.25rem); }
+.signal-metrics div + div { border-inline-start: 1px solid var(--border); }
+.signal-metrics dt { font-size: .75rem; color: var(--muted-foreground); }
+.signal-metrics dd { font: 650 clamp(1.15rem, 4vw, 2.2rem) ui-monospace, monospace; }
+.signal-metrics div:nth-child(2) dd { color: var(--primary); }
+.signal-metrics div:nth-child(3) dd, .signal-rec { color: #ff9c91; }
+.signal-filters {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border: 1px solid var(--border);
+  border-radius: .55rem;
+  width: min(100%, 24rem);
+  padding: .2rem;
+}
+.signal-filters button { min-height: 44px; border-radius: .35rem; font-size: clamp(.68rem, 2.7vw, .85rem); }
+.signal-filters button[aria-pressed="true"] { background: var(--primary); color: var(--primary-foreground); font-weight: 700; }
+.signal-rundown { display: grid; gap: .5rem; }
+.signal-row {
+  display: grid;
+  grid-template-columns: clamp(2.5rem, 9vw, 5.25rem) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: clamp(.35rem, 1.4vw, .85rem);
+  padding: clamp(.4rem, 1.4vw, .8rem);
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: .6rem;
+}
+.signal-row-active { border-color: #79975f; }
+.signal-thumbnail {
+  aspect-ratio: 1.35;
+  display: grid;
+  place-items: center;
+  background: #314941;
+  color: #d6e9dc;
+  border-radius: .3rem;
+  overflow: hidden;
+  font: 600 .8rem ui-monospace, monospace;
+}
+.signal-thumbnail img { width: 100%; height: 100%; object-fit: cover; }
+.signal-identity h2 { font-weight: 680; overflow-wrap: anywhere; }
+.signal-identity p, .signal-actions, .signal-row-details, .signal-relay {
+  display: flex;
+  align-items: center;
+  gap: .45rem;
+  min-width: 0;
+}
+.signal-identity p, .signal-row-details { flex-wrap: wrap; font-size: .75rem; color: var(--muted-foreground); }
+.signal-state::before { content: "●"; margin-inline-end: .3em; }
+.signal-live { color: var(--primary); }
+.signal-actions [data-slot="button"] { min-height: 44px; padding-inline: .45rem; }
+.signal-actions [data-slot="button"][data-size="icon"] { min-width: 44px; }
+.signal-row-details { grid-column: 1 / -1; border-top: 1px solid var(--border); padding-top: .6rem; gap: .75rem; }
+.signal-relay { flex: 1 1 12rem; }
+.signal-relay code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; user-select: all; }
+.signal-empty { border: 1px dashed var(--border); padding: 2rem 1rem; text-align: center; color: var(--muted-foreground); }
+
+@media (max-width: 360px) {
+  .signal-row { grid-template-columns: 2.5rem minmax(0, 1fr); }
+  .signal-actions { grid-column: 2; }
+}
+
+@media (width < 48rem) {
+  .signal-dock {
+    position: fixed;
+    z-index: 40;
+    inset: auto 0 0;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    padding: 0 env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+    background: var(--card);
+    border-top: 1px solid var(--border);
+  }
+
+  .signal-dock > button {
+    display: grid;
+    justify-items: center;
+    align-content: center;
+    gap: .2rem;
+    min-height: 3.5rem;
+    font-size: .75rem;
+  }
+
+  .signal-dock button[aria-current="page"], .signal-dock-active { color: var(--primary); }
+
+  .signal-more-nav {
+    position: absolute;
+    inset: auto .75rem calc(100% + .5rem) auto;
+    min-width: min(15rem, calc(100vw - 1.5rem));
+    padding: .35rem;
+    background: var(--popover);
+    border: 1px solid var(--border);
+    border-radius: .6rem;
+  }
+
+  .signal-more-nav button {
+    display: flex;
+    align-items: center;
+    gap: .65rem;
+    min-height: 44px;
+    padding-inline: .6rem;
+    width: 100%;
+  }
+}

@@ -512,15 +512,15 @@
 
 <template>
 	<div class="pipeline-page flex flex-col gap-6">
-		<header class="rounded-2xl bg-[#302c25] p-5 md:p-7 text-[#f3ead8] flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+		<header class="rounded-lg bg-[#17241e] p-5 md:p-7 text-[#eef2e9] flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
 			<div>
-				<p class="text-xs uppercase tracking-[0.18em] font-bold text-[#e6a364]">Automation studio</p>
+				<p class="text-xs uppercase tracking-[0.18em] font-bold text-[#c2f368]">Automation studio</p>
 				<h1 class="mt-2 text-2xl md:text-3xl font-bold mb-1">{{ t("postprocess.title") }}</h1>
 				<p class="text-sm text-white/65">
 					{{ t("postprocess.description") }}
 				</p>
 			</div>
-			<span class="text-sm text-[#e6a364] md:mt-0.5 shrink-0">
+			<span class="text-sm text-[#c2f368] md:mt-0.5 shrink-0">
 				{{ store.saving ? t("postprocess.saving") : t("postprocess.saved") }}
 			</span>
 		</header>

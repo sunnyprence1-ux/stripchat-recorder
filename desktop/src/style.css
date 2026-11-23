@@ -144,11 +144,6 @@
 .workspace-surface > * {
   max-width: 92rem;
 }
-.library-page > header,
-.pipeline-page > header,
-.relay-page > header {
-  border-radius: var(--radius);
-}
 .settings-page section h2 {
   color: var(--primary);
 }

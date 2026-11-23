@@ -10,7 +10,6 @@
 -->
 <script setup lang="ts">
 	import { computed, onMounted, ref } from "vue";
-	import { Radio, CircleDotDashed, UsersRound } from "@lucide/vue";
 	import { useStreamersStore } from "../stores/streamers";
 	import type { StreamerEntry } from "../stores/streamers";
 	import { useNotify } from "../composables/useNotify";
@@ -26,13 +25,22 @@
 	const ppStatusStore = usePpStatusStore();
 	const { toast, confirm } = useNotify();
 	const { t } = useI18n();
-	const startAllTargets = computed(() => store.streamers.filter((s) => s.is_recordable && !s.is_recording));
 	const onlineCount = computed(() => store.streamers.filter((s) => s.is_online).length);
 	const recordingCount = computed(() => store.streamers.filter((s) => s.is_recording).length);
-	const totalViewers = computed(() => store.streamers.reduce((total, s) => total + (s.is_online ? s.viewers : 0), 0));
 	const sortedStreamers = computed(() => [...store.streamers].sort((a, b) => a.username.localeCompare(b.username)));
 	/** 是否显示添加主播对话框 / Whether to show the add streamer dialog */
 	const showAdd = ref(false);
+
+	const filters = ["All", "Live", "Recording", "Offline"] as const;
+	const filter = ref<(typeof filters)[number]>("All");
+	const visibleStreamers = computed(() => sortedStreamers.value.filter((entry) => {
+		switch (filter.value) {
+			case "Live": return entry.is_online;
+			case "Recording": return entry.is_recording;
+			case "Offline": return !entry.is_online;
+			default: return true;
+		}
+	}));
 
 	onMounted(async () => {
 		store.initListeners();
@@ -134,45 +142,32 @@
 </script>
 
 <template>
-	<div class="flex flex-col gap-7">
-		<section class="rounded-2xl bg-[#302c25] p-5 md:p-7 text-white">
-			<div class="flex flex-wrap items-end justify-between gap-5"><div><p class="text-xs uppercase tracking-[0.18em] font-bold text-[#e6a364]">Recording desk</p><h2 class="mt-2 text-2xl md:text-3xl font-bold tracking-tight">Your stream watchlist</h2><p class="mt-2 max-w-lg text-sm text-white/65">Monitor live rooms, start a capture, and keep recordings moving.</p></div><Button class="rounded-lg bg-[#d88742] text-[#261c12] hover:bg-[#e6a364]" @click="showAdd = true">{{ t("home.addStreamer") }}</Button></div>
-		</section>
-		<section class="grid grid-cols-2 lg:grid-cols-3 gap-3">
-			<div class="rounded-xl border border-border bg-card p-4"><div class="flex items-center justify-between text-muted-foreground"><span class="text-xs font-bold uppercase tracking-wider">Watching</span><UsersRound class="size-4 text-primary" /></div><p class="mt-3 text-2xl font-bold">{{ store.streamers.length }}</p><p class="text-xs text-muted-foreground">tracked rooms</p></div>
-			<div class="rounded-xl border border-border bg-card p-4"><div class="flex items-center justify-between text-muted-foreground"><span class="text-xs font-bold uppercase tracking-wider">Live now</span><Radio class="size-4 text-emerald-500" /></div><p class="mt-3 text-2xl font-bold">{{ onlineCount }}</p><p class="text-xs text-muted-foreground">{{ totalViewers.toLocaleString() }} viewers</p></div>
-			<div class="col-span-2 lg:col-span-1 rounded-xl border border-border bg-card p-4"><div class="flex items-center justify-between text-muted-foreground"><span class="text-xs font-bold uppercase tracking-wider">Capturing</span><CircleDotDashed class="size-4 text-rose-500" /></div><p class="mt-3 text-2xl font-bold">{{ recordingCount }}</p><p class="text-xs text-muted-foreground">active recordings</p></div>
-		</section>
-		<header class="flex flex-wrap items-end justify-between gap-3 border-b border-border pb-4"><div><h2 class="text-lg font-bold">Streamers</h2><p class="text-sm text-muted-foreground">{{ t("home.subtitle", { total: store.streamers.length, recording: recordingCount }) }}</p></div></header>
+	<section class="signal-watchlist">
+		<header class="signal-watch-header">
+			<h1>Watchlist</h1>
+			<Button @click="showAdd = true">+ {{ t("home.addStreamer") }}</Button>
+		</header>
+		<dl class="signal-metrics">
+			<div><dt>Tracked</dt><dd>{{ store.streamers.length }}</dd></div>
+			<div><dt>Live</dt><dd>{{ onlineCount }}</dd></div>
+			<div><dt>Recording</dt><dd>{{ recordingCount }}</dd></div>
+		</dl>
+		<div class="signal-toolbar">
+			<div class="signal-filters" role="group" aria-label="Filter watchlist">
+				<button v-for="option in filters" :key="option" type="button"
+					:aria-pressed="filter === option" @click="filter = option">{{ option }}</button>
+			</div>
 
-		<div
-			v-if="store.loading && store.streamers.length === 0"
-			class="text-center text-muted-foreground py-16"
-		>
-			{{ t("home.loadingStreamers") }}
 		</div>
-
-		<div
-			v-else-if="store.streamers.length === 0"
-			class="text-center text-muted-foreground py-16 flex flex-col items-center gap-3"
-		>
-			<p>{{ t("home.noStreamers") }}</p>
-			<Button @click="showAdd = true">{{ t("home.addFirst") }}</Button>
-		</div>
-
-		<div
-			v-else
-			class="grid grid-cols-[repeat(auto-fill,minmax(min(100%,280px),1fr))] gap-4"
-		>
-			<StreamerCard
-				v-for="s in sortedStreamers"
-				:key="s.username"
-				:streamer="s"
+		<p v-if="store.loading && !store.streamers.length" class="signal-empty" role="status">{{ t("home.loadingStreamers") }}</p>
+		<p v-else-if="!store.streamers.length" class="signal-empty">{{ t("home.noStreamers") }}</p>
+		<p v-else-if="!visibleStreamers.length" class="signal-empty" role="status">No streams match this filter.</p>
+		<div v-else class="signal-rundown">
+			<StreamerCard v-for="s in visibleStreamers" :key="s.username" :streamer="s"
 				@remove="handleRemove(s.username)"
 				@toggle-auto="handleToggleAuto(s.username, s, $event)"
 				@start="handleStart(s.username)"
-				@stop="handleStop(s.username)"
-			/>
+				@stop="handleStop(s.username)" />
 		</div>
 
 		<AddStreamerDialog
@@ -180,6 +175,5 @@
 			@close="showAdd = false"
 			@added="showAdd = false"
 		/>
-	</div>
+	</section>
 </template>
-

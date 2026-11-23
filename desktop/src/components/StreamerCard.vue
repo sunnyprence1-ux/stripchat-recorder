@@ -18,18 +18,15 @@
 -->
 <script setup lang="ts">
 	import type { StreamerEntry } from "../stores/streamers";
-	import { Card, CardContent } from "@/components/ui/card";
-	import { Badge } from "@/components/ui/badge";
 	import { Button } from "@/components/ui/button";
 	import { Switch } from "@/components/ui/switch";
 	import { Label } from "@/components/ui/label";
 	import { ref, watch, computed } from "vue";
 	import { useFastThumbnail } from "@/composables/useFastThumbnail";
-	import { X, Circle, Eye } from "@lucide/vue";
 	import { useI18n } from "vue-i18n";
 
 	const props = defineProps<{ streamer: StreamerEntry }>();
-	void props;
+	const detailsOpen = ref(props.streamer.is_recording);
 	const emit = defineEmits<{
 		remove: [];
 		start: [];
@@ -44,6 +41,8 @@
 		(val) => { autoRecord.value = val; },
 	);
 
+	watch(() => props.streamer.is_recording, (recording) => { detailsOpen.value = recording; });
+
 	const thumbnailSrc = computed(() => props.streamer.thumbnail_url ?? null);
 	const { url: fastThumbnail, retry: retryThumbnail } = useFastThumbnail(thumbnailSrc);
 
@@ -52,110 +51,33 @@
 		emit("toggle-auto", val);
 	}
 
-	function statusClass(s: StreamerEntry): string {
-		if (!s.is_online) return "bg-zinc-800 text-zinc-400 border-transparent";
-		if (s.status === "Public Show") return "bg-green-900 text-green-300 border-transparent";
-		return "bg-amber-900 text-amber-300 border-transparent";
-	}
 </script>
 
 <template>
-	<Card
-		class="overflow-hidden rounded-2xl border-border bg-card py-0 shadow-sm transition-transform duration-200 hover:-translate-y-0.5"
-		:class="{
-			'border-green-900/50': streamer.is_online && !streamer.is_recording,
-			'border-red-900/50': streamer.is_recording,
-		}"
-	>
-		<div class="relative aspect-[16/9] bg-[#302c25] overflow-hidden">
-			<img
-				v-if="fastThumbnail"
-				:src="fastThumbnail"
-				loading="lazy"
-				decoding="async"
-				:alt="`${streamer.username} room thumbnail`"
-				class="w-full h-full object-cover"
-				@error="retryThumbnail"
-			/>
-			<div
-				v-else
-				class="w-full h-full flex items-center justify-center text-4xl font-bold text-muted-foreground/20"
-			>
-				{{ streamer.username[0].toUpperCase() }}
-			</div>
-			<Circle
-				v-if="streamer.is_recording"
-				class="absolute top-1.5 right-2 size-2.5 fill-red-500 text-red-500 animate-pulse"
-			/>
-			<div class="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/85 to-transparent px-4 pb-3 pt-10">
-				<p class="truncate text-base font-bold text-white">{{ streamer.username }}</p>
-				<p class="mt-0.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-white/65">{{ streamer.is_recording ? 'Recording' : streamer.is_online ? 'Live room' : 'Watchlist' }}</p>
-			</div>
+	<article class="signal-row" :class="{ 'signal-row-active': streamer.is_recording }">
+		<div class="signal-thumbnail">
+			<img v-if="fastThumbnail" :src="fastThumbnail" alt="" loading="lazy" decoding="async" @error="retryThumbnail" />
+			<span v-else aria-hidden="true">{{ streamer.username.slice(0, 2).toUpperCase() }}</span>
 		</div>
-
-		<CardContent class="p-4 flex flex-col gap-3">
-			<div class="flex items-center justify-end -mt-1">
-				<Button
-					variant="ghost"
-					size="icon"
-					class="h-6 w-6 shrink-0 text-muted-foreground hover:text-destructive"
-					:title="t('streamerCard.removeTitle')"
-					@click="emit('remove')"
-				>
-					<X class="size-3.5" />
-				</Button>
+		<div class="signal-identity">
+			<h2>{{ streamer.username }}</h2>
+			<p>
+				<span class="signal-state" :class="{ 'signal-live': streamer.is_online }">{{ streamer.is_online ? streamer.status || 'Live' : t("streamerCard.offline") }}</span>
+				<span v-if="streamer.is_recording" class="signal-rec">Recording</span>
+				<span v-else-if="streamer.is_online">{{ streamer.viewers.toLocaleString() }} viewers</span>
+			</p>
+		</div>
+		<div class="signal-actions">
+			<Button v-if="streamer.is_recording" variant="destructive" @click="emit('stop')">■ Stop</Button>
+			<Button v-else :disabled="!streamer.is_recordable" :title="!streamer.is_recordable ? streamer.status : undefined" @click="emit('start')">● Record</Button>
+			<Button size="icon" variant="outline" :aria-expanded="detailsOpen" :aria-label="'Options for ' + streamer.username" @click="detailsOpen = !detailsOpen">⋯</Button>
+		</div>
+		<div v-if="detailsOpen" class="signal-row-details">
+			<div class="flex items-center gap-2">
+				<Switch :id="'auto-' + streamer.username" :model-value="autoRecord" @update:model-value="onAutoChange" />
+				<Label :for="'auto-' + streamer.username">{{ t("streamerCard.autoRecord") }}</Label>
 			</div>
-
-			<div class="flex items-center gap-1.5 flex-wrap">
-				<Badge :class="statusClass(streamer)">
-					{{ streamer.is_online ? streamer.status : t("streamerCard.offline") }}
-				</Badge>
-				<Badge v-if="streamer.is_recording" variant="destructive">{{ t("streamerCard.recording") }}</Badge>
-				<span
-					v-if="streamer.is_online && streamer.viewers > 0"
-					class="text-xs text-muted-foreground flex items-center gap-1"
-				>
-					<Eye class="size-3" /> {{ streamer.viewers.toLocaleString() }}
-				</span>
-			</div>
-
-			<div class="flex items-center gap-2 mt-0.5">
-				<Button
-					v-if="!streamer.is_recording"
-					size="sm"
-					class="flex-1"
-					:disabled="!streamer.is_recordable"
-					:title="!streamer.is_recordable ? streamer.status : ''"
-					@click="emit('start')"
-				>
-					{{ t("streamerCard.startRecording") }}
-				</Button>
-				<Button
-					v-else
-					size="sm"
-					variant="destructive"
-					class="flex-1"
-					@click="emit('stop')"
-				>
-					{{ t("streamerCard.stopRecording") }}
-				</Button>
-
-				<div class="flex items-center gap-1.5 shrink-0" :title="t('streamerCard.autoRecordTitle')">
-					<Switch
-						:id="`auto-${streamer.username}`"
-						:model-value="autoRecord"
-						@update:model-value="onAutoChange"
-					/>
-					<Label
-						:for="`auto-${streamer.username}`"
-						class="text-xs text-muted-foreground select-none"
-					>
-						{{ t("streamerCard.autoRecord") }}
-					</Label>
-				</div>
-			</div>
-
-		</CardContent>
-	</Card>
+			<Button variant="outline" @click="emit('remove')">Remove</Button>
+		</div>
+	</article>
 </template>
-

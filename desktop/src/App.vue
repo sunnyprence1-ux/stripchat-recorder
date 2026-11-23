@@ -19,7 +19,6 @@
 	import { computed, onMounted, onUnmounted, ref } from "vue";
 	import { RouterView, useRouter, useRoute } from "vue-router";
 	import NotifyLayer from "./components/NotifyLayer.vue";
-	import { Button } from "@/components/ui/button";
 	import { Activity, Users, Video, Workflow, Search, Settings } from "@lucide/vue";
 	import { call, on, onSseReconnect, onSseDisconnect } from "@/lib/api";
 	import { useNotify } from "@/composables/useNotify";
@@ -50,6 +49,22 @@
 		{ to: "/finder", labelKey: "nav.finder", icon: Search },
 		{ to: "/settings", labelKey: "nav.settings", icon: Settings },
 	];
+
+	const primaryNav = navItems.slice(0, 2);
+	const moreNav = navItems.slice(2);
+	const moreOpen = ref(false);
+
+	function navigateMobile(to: string) {
+		moreOpen.value = false;
+		void router.push(to);
+	}
+
+	function navLabel(item: (typeof navItems)[number]) {
+		if (item.to === "/") return "Watchlist";
+		if (item.to === "/recordings") return "Library";
+		return t(item.labelKey);
+	}
+
 
 	/**
 	 * 根据参数切换文档根元素的 dark 类，实现深色/浅色主题切换。
@@ -209,19 +224,19 @@
 		</div>
 
 		<!-- 正常布局：侧边栏 + 内容区 / Normal layout: sidebar + content -->
-		<div v-else key="main" class="app-shell-height app-frame grid grid-cols-1 md:grid-cols-[68px_minmax(0,1fr)] lg:grid-cols-[224px_minmax(0,1fr)] overflow-hidden">
-			<aside class="hidden md:flex border-r border-white/10 bg-[#25221d] flex-col items-center lg:items-stretch py-5 text-[#b7afa0]">
-				<button class="flex items-center gap-3 px-3 lg:px-5" aria-label="Go to watchlist" @click="router.push('/')"><span class="grid size-10 shrink-0 place-items-center rounded-xl bg-[#d88742] text-[#261c12] font-black text-xs">SR</span><span class="hidden lg:block text-left"><span class="block text-sm font-bold tracking-wide text-[#f3ead8]">Capture Desk</span><span class="mt-0.5 block text-[9px] uppercase tracking-[0.18em] text-[#a79d8a]">Stream operations</span></span></button>
+		<div v-else key="main" class="app-shell-height app-frame signal-shell grid grid-cols-1 md:grid-cols-[68px_minmax(0,1fr)] lg:grid-cols-[172px_minmax(0,1fr)] overflow-hidden">
+			<aside class="hidden md:flex border-r border-white/10 bg-[#101b15] flex-col items-center lg:items-stretch py-5 text-[#a8b8ae]">
+				<button class="flex items-center gap-3 px-3 lg:px-5" aria-label="Go to watchlist" @click="router.push('/')"><span class="grid size-10 shrink-0 place-items-center rounded-xl bg-[#c2f368] text-[#142007] font-black text-xs">◉</span><span class="hidden lg:block text-left"><span class="block text-sm font-bold tracking-wide text-[#eef2e9]">Signal Room</span><span class="mt-0.5 block text-[9px] uppercase tracking-[0.18em] text-[#a79d8a]">Stream operations</span></span></button>
 				<p class="hidden lg:block px-5 mt-9 mb-2 text-[9px] uppercase tracking-[0.2em] font-bold text-white/35">Workspace</p>
 				<nav class="mt-9 lg:mt-0 flex flex-col gap-1.5 px-2 lg:px-3">
-					<button v-for="item in navItems" :key="item.to" type="button" :title="t(item.labelKey)" :aria-current="route.path === item.to ? 'page' : undefined" class="flex h-11 w-full items-center justify-center lg:justify-start gap-3 rounded-lg px-2 lg:px-3 text-sm" :class="route.path === item.to ? 'bg-[#d88742] text-[#261c12] font-semibold' : 'hover:bg-white/8 hover:text-white'" @click="router.push(item.to)"><component :is="item.icon" class="size-[18px] shrink-0" /><span class="hidden lg:inline truncate">{{ t(item.labelKey) }}</span></button>
+					<button v-for="item in navItems" :key="item.to" type="button" :title="navLabel(item)" :aria-current="route.path === item.to ? 'page' : undefined" class="flex h-11 w-full items-center justify-center lg:justify-start gap-3 rounded-lg px-2 lg:px-3 text-sm" :class="route.path === item.to ? 'bg-[#c2f368] text-[#142007] font-semibold' : 'hover:bg-white/8 hover:text-white'" @click="router.push(item.to)"><component :is="item.icon" class="size-[18px] shrink-0" /><span class="hidden lg:inline truncate">{{ navLabel(item) }}</span></button>
 				</nav>
-				<div class="mt-auto border-t border-white/10 pt-4 px-2 lg:px-4"><div class="flex items-center justify-center lg:justify-start gap-2 rounded-lg bg-white/5 px-2 lg:px-3 py-2.5 text-xs text-[#b7afa0]" :title="`${recordingCount} active recordings`"><Activity class="size-4 shrink-0" :class="recordingCount > 0 ? 'text-rose-400' : 'text-[#a79d8a]'" /><span class="hidden lg:inline">{{ recordingCount }} active {{ recordingCount === 1 ? 'recording' : 'recordings' }}</span></div></div>
+				<div class="mt-auto border-t border-white/10 pt-4 px-2 lg:px-4"><div class="flex items-center justify-center lg:justify-start gap-2 rounded-lg bg-white/5 px-2 lg:px-3 py-2.5 text-xs text-[#a8b8ae]" :title="`${recordingCount} active recordings`"><Activity class="size-4 shrink-0" :class="recordingCount > 0 ? 'text-rose-400' : 'text-[#a79d8a]'" /><span class="hidden lg:inline">{{ recordingCount }} active {{ recordingCount === 1 ? 'recording' : 'recordings' }}</span></div></div>
 			</aside>
-			<main class="min-w-0 overflow-hidden bg-[#f0eee8] dark:bg-[#191815]">
-				<header class="h-[4.5rem] md:h-[4.75rem] border-b border-[#ded9cc] dark:border-white/8 bg-[#faf9f5] dark:bg-[#211f1b] px-4 md:px-8 flex items-center justify-between gap-2">
-					<div class="flex items-center gap-3 min-w-0"><button class="md:hidden grid size-9 shrink-0 place-items-center rounded-xl bg-[#d88742] text-[#261c12] font-black text-xs" @click="router.push('/')">SR</button><div class="min-w-0"><p class="text-[9px] md:text-[10px] tracking-[0.16em] font-bold uppercase text-[#a16c3e]">Capture Desk <span class="px-1 text-[#c5bbaa]">/</span> Workspace</p><h1 class="truncate text-base md:text-lg font-bold">{{ t(pageTitle) }}</h1></div></div>
-					<div class="hidden sm:flex items-center gap-2 rounded-md bg-[#eeece5] dark:bg-white/5 px-3 py-1.5 text-xs"><span class="size-1.5 rounded-full" :class="recordingCount > 0 ? 'bg-rose-500' : 'bg-[#a79d8a]'" />{{ recordingCount }} {{ recordingCount === 1 ? 'recording' : 'recordings' }}</div>
+			<main class="min-w-0 overflow-hidden bg-[#0e1712] dark:bg-[#0e1712]">
+				<header class="h-[4.5rem] md:h-[4.75rem] border-b border-[#34493d] dark:border-white/8 bg-[#121f18] dark:bg-[#121f18] px-4 md:px-8 flex items-center justify-between gap-2">
+					<div class="flex items-center gap-3 min-w-0"><button class="md:hidden grid size-9 shrink-0 place-items-center rounded-xl bg-[#c2f368] text-[#142007] font-black text-xs" @click="router.push('/')">◉</button><div class="min-w-0"><p class="text-[9px] md:text-[10px] tracking-[0.16em] font-bold uppercase text-[#bbd3c3]">Signal Room</p><p v-if="route.path !== '/'" class="truncate text-base md:text-lg font-bold">{{ t(pageTitle) }}</p></div></div>
+					<div class="flex shrink-0 items-center gap-2 rounded-full border border-border bg-[#1d3025] dark:bg-white/5 px-3 py-1.5 text-xs"><span class="size-1.5 rounded-full" :class="recordingCount > 0 ? 'bg-rose-500' : 'bg-[#a79d8a]'" />{{ recordingCount }} {{ recordingCount === 1 ? 'recording' : 'recordings' }}</div>
 				</header>
 				<div ref="mainScrollEl" class="h-[calc(100%-4.5rem)] md:h-[calc(100%-4.75rem)] overflow-y-auto overflow-x-hidden p-3 sm:p-4 md:p-7 xl:p-9 pb-[calc(6rem_+_env(safe-area-inset-bottom))] md:pb-8 scrollbar-overlay workspace-surface">
 					<RouterView v-slot="{ Component }">
@@ -231,8 +246,24 @@
 					</RouterView>
 				</div>
 			</main>
-			<nav class="md:hidden fixed inset-x-2 bottom-2 z-40 rounded-xl border border-white/10 bg-[#25221d] shadow-xl" aria-label="Main navigation" :style="{ paddingBottom: 'env(safe-area-inset-bottom)' }">
-				<div class="flex items-stretch overflow-x-auto"> <button v-for="item in navItems" :key="item.to" type="button" class="flex h-14 min-w-[52px] flex-1 flex-col items-center justify-center gap-1 text-[9px]" :class="route.path === item.to ? 'text-[#e9a15b]' : 'text-[#b7afa0]'" :aria-current="route.path === item.to ? 'page' : undefined" :aria-label="t(item.labelKey)" @click="router.push(item.to)"><component :is="item.icon" class="size-4"/><span class="max-w-full truncate px-0.5">{{ t(item.labelKey) }}</span></button></div>
+			<nav class="signal-dock md:hidden" aria-label="Main navigation" @keydown.esc="moreOpen = false">
+				<button v-for="item in primaryNav" :key="item.to" type="button"
+					:aria-current="route.path === item.to ? 'page' : undefined" @click="navigateMobile(item.to)">
+					<component :is="item.icon" class="size-5" />
+					{{ navLabel(item) }}
+				</button>
+				<button type="button" :aria-expanded="moreOpen" aria-controls="signal-more-nav"
+					:class="{ 'signal-dock-active': moreNav.some((item) => item.to === route.path) }"
+					@click="moreOpen = !moreOpen">
+					<span aria-hidden="true" class="text-xl leading-none">⋯</span> More
+				</button>
+				<div v-if="moreOpen" id="signal-more-nav" class="signal-more-nav">
+					<button v-for="item in moreNav" :key="item.to" type="button"
+						:aria-current="route.path === item.to ? 'page' : undefined" @click="navigateMobile(item.to)">
+						<component :is="item.icon" class="size-5" />
+						{{ navLabel(item) }}
+					</button>
+				</div>
 			</nav>
 			<NotifyLayer />
 		</div>

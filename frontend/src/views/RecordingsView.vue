@@ -873,7 +873,7 @@
 							v-if="previewScale !== 1"
 							variant="secondary"
 							size="sm"
-							class="absolute bottom-5 left-1/2 -translate-x-1/2 z-10 rounded-full bg-black/60 hover:bg-black/80 text-white text-xs px-3 py-1.5 backdrop-blur-sm"
+							class="absolute bottom-5 left-1/2 -translate-x-1/2 z-10 rounded-full bg-black/60 hover:bg-black/80 text-white text-xs px-3 py-1.5"
 							@click="resetPreviewTransform"
 						>
 							{{
@@ -889,13 +889,13 @@
 
 		<header
 			ref="headerEl"
-			class="flex flex-col gap-3 md:flex-row md:items-end md:justify-between md:gap-4 shrink-0 p-4 md:p-6 bg-[#302c25] text-[#f3ead8] rounded-2xl sticky top-0 z-20"
+			class="flex flex-col gap-3 md:flex-row md:items-end md:justify-between md:gap-4 min-w-0 flex-wrap p-4 md:p-6 bg-[#17241e] text-[#eef2e9] rounded-lg sticky top-0 z-20"
 		>
 			<div class="flex-1 min-w-0">
-				<p class="text-xs uppercase tracking-[0.18em] font-bold text-[#e6a364]">Media library</p>
+				<p class="text-xs uppercase tracking-[0.18em] font-bold text-[#c2f368]">Media library</p>
 				<h1 class="mt-2 text-2xl md:text-3xl font-bold mb-1">{{ t("recordings.title") }}</h1>
 				<div
-					class="flex items-center gap-3 text-sm text-white/65 flex-wrap"
+					class="flex items-center gap-3 text-sm text-foreground flex-wrap"
 				>
 					<span>{{
 						t("recordings.subtitle.total", { count: files.length })
@@ -937,7 +937,7 @@
 				</div>
 			</div>
 			<!-- 桌面端全局与批量操作；移动端改用工具栏和底部固定操作栏 / Desktop global and batch actions; mobile uses toolbar and bottom bar -->
-			<div class="hidden md:flex gap-2 shrink-0 items-start">
+			<div class="hidden md:flex flex-wrap gap-2 items-start">
 				<Button
 					variant="destructive"
 					size="sm"
@@ -948,7 +948,7 @@
 					<Loader2 v-if="cleaningAll" class="size-3.5 animate-spin" />
 					{{ t("recordings.cleanAll") }}
 				</Button>
-				<div v-if="files.length > 0" class="flex gap-2">
+				<div v-if="files.length > 0" class="flex flex-wrap gap-2">
 					<Button
 						variant="outline"
 						size="sm"
@@ -1064,7 +1064,7 @@
 		<Transition name="fade">
 			<div
 				v-if="selectedCount > 0"
-				class="md:hidden fixed inset-x-2 bottom-[calc(4.5rem_+_env(safe-area-inset-bottom))] z-30 flex gap-2 rounded-xl border border-border bg-background/95 px-3 py-2 shadow-lg backdrop-blur-sm"
+				class="md:hidden fixed inset-x-2 bottom-[calc(4.5rem_+_env(safe-area-inset-bottom))] z-30 flex gap-2 rounded-xl border border-border bg-background px-3 py-2 shadow-lg"
 			>
 				<Button
 					variant="outline"

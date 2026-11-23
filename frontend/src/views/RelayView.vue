@@ -190,9 +190,9 @@
 
 <template>
 	<div class="relay-page flex flex-col gap-6">
-		<header class="rounded-2xl bg-[#302c25] p-5 md:p-7 text-[#f3ead8] flex flex-wrap items-end justify-between gap-3">
+		<header class="rounded-lg bg-[#17241e] p-5 md:p-7 text-[#eef2e9] flex flex-wrap items-end justify-between gap-3">
 			<div class="min-w-0">
-				<p class="text-xs uppercase tracking-[0.18em] font-bold text-[#e6a364]">Live delivery</p>
+				<p class="text-xs uppercase tracking-[0.18em] font-bold text-[#c2f368]">Live delivery</p>
 				<h1 class="mt-2 text-2xl md:text-3xl font-bold mb-1">{{ t("relay.title") }}</h1>
 				<p class="text-sm text-white/65">
 					{{ t("relay.subtitle", { streams: sessions.length, connections: totalConnections }) }}
@@ -201,9 +201,9 @@
 		</header>
 
 		<!-- 转发流提示 / Relay hint -->
-		<div class="rounded-xl border border-border bg-[#302c25] px-4 py-4 md:px-6 md:py-5 text-sm text-[#f3ead8]">
+		<div class="rounded-xl border border-border bg-[#17241e] px-4 py-4 md:px-6 md:py-5 text-sm text-[#eef2e9]">
 			<p>{{ t("relay.hint") }}</p>
-			<p class="mt-2 rounded-md bg-black/20 px-3 py-2 font-mono text-xs text-[#e6a364] break-all">
+			<p class="mt-2 rounded-md bg-black/20 px-3 py-2 font-mono text-xs text-[#c2f368] break-all">
 				{{ exampleUrl }}
 			</p>
 		</div>
@@ -231,7 +231,7 @@
 				class="overflow-hidden rounded-xl border-border bg-card py-0 shadow-sm"
 				:class="{
 					'border-green-900/50': session.stream_state.type === 'live',
-					'border-[#d88742]/50': session.stream_state.type === 'connecting',
+					'border-[#c2f368]/50': session.stream_state.type === 'connecting',
 					'border-red-900/50': session.stream_state.type === 'error',
 				}"
 			>
@@ -248,7 +248,7 @@
 								class="size-4 shrink-0"
 								:class="{
 									'text-green-400 animate-pulse': session.stream_state.type === 'live',
-									'text-[#d88742] animate-spin': session.stream_state.type === 'connecting',
+									'text-[#c2f368] animate-spin': session.stream_state.type === 'connecting',
 									'text-red-400': session.stream_state.type === 'error',
 									'text-zinc-500': session.stream_state.type === 'offline',
 								}"
@@ -291,7 +291,7 @@
 						<Button
 							size="sm"
 							variant="ghost"
-							class="shrink-0 px-2 h-7 max-md:h-9 text-muted-foreground hover:text-[#d88742]"
+							class="shrink-0 px-2 h-7 max-md:h-9 text-muted-foreground hover:text-[#c2f368]"
 							:title="t('relay.copyUrl')"
 							@click="copyUrl(session.username, getStreamUrl(session))"
 						>

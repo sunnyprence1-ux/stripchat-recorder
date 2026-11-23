@@ -423,8 +423,8 @@ async function openSimilarDialog(m: ModelResult) {
 <template>
   <div class="finder-page flex flex-col gap-5" @paste.capture="onPaste">
     <!-- Header -->
-    <header class="rounded-2xl bg-[#302c25] p-5 md:p-7 text-[#f3ead8]">
-      <p class="text-xs uppercase tracking-[0.18em] font-bold text-[#e6a364]">Discovery workspace</p>
+    <header class="rounded-lg bg-[#17241e] p-5 md:p-7 text-[#eef2e9]">
+      <p class="text-xs uppercase tracking-[0.18em] font-bold text-[#c2f368]">Discovery workspace</p>
       <h1 class="mt-2 text-2xl md:text-3xl font-bold mb-1">{{ t("finder.title") }}</h1>
       <p class="text-sm text-white/65">
         {{ t("finder.description") }}

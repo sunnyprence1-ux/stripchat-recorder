@@ -178,11 +178,6 @@
   margin-left: auto;
   margin-right: auto;
 }
-.library-page > header,
-.pipeline-page > header,
-.relay-page > header {
-  border-radius: 1rem;
-}
 .settings-page section h2 {
   color: var(--primary);
 }
