@@ -56,8 +56,23 @@
 			const response = await fetch(`/api/live-rooms?offset=${offset}`, {
 				signal: controller.signal,
 			});
-			if (!response.ok) throw new Error(await response.text());
+			const contentType = response.headers.get("content-type") ?? "";
+			if (response.status === 404 || contentType.includes("text/html")) {
+				browseError.value = "The live room API is unavailable. Update the recorder backend and check that your reverse proxy forwards /api/live-rooms.";
+				return;
+			}
+			if (!response.ok) {
+				const detail = response.status === 400 && contentType.includes("text/plain")
+					? await response.text()
+					: "";
+				browseError.value = detail || `The recorder returned HTTP ${response.status}. Try again later.`;
+				return;
+			}
 			const page = await response.json() as { rooms: LiveRoom[]; next_offset: number | null };
+			if (!Array.isArray(page.rooms)) {
+				browseError.value = "The recorder returned an unexpected live room response.";
+				return;
+			}
 			const seen = new Set(rooms.value.map((room) => room.username.toLowerCase()));
 			for (const room of page.rooms) {
 				const name = room.username.toLowerCase();

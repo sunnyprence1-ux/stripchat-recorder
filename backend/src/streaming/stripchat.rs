@@ -362,16 +362,27 @@ impl StripchatApi {
     pub async fn browse_live_rooms(&self, offset: usize) -> Result<serde_json::Value> {
         const LIMIT: usize = 24;
         let url = self.api_url(&format!(
-            "https://stripchat.com/api/front/models?removeShows=false&recInFeatured=false&limit={LIMIT}&offset={}",
+            "https://stripchat.com/api/front/models?removeShows=false&recInFeatured=false&limit={LIMIT}&offset={}&primaryTag=girls",
             offset.min(2400)
         ));
-        let response = self.api_get(&url, &self.referer()).await?;
+        let response = self.api_get(&url, &self.referer()).await.map_err(|error| {
+            tracing::warn!("Live room directory request failed: {}", error);
+            AppError::Other("The recorder could not reach the live room directory. Check the server connection and API proxy settings.".into())
+        })?;
+        let status = response.status().as_u16();
         if !response.status().is_success() {
+            let guidance = match status {
+                403 | 451 => "Check whether the recorder server has access to the directory.",
+                429 => "Wait a moment before retrying.",
+                _ => "Try again later.",
+            };
             return Err(AppError::Other(format!(
-                "The live room directory returned HTTP {}.", response.status().as_u16()
+                "The live room directory returned HTTP {status}. {guidance}"
             )));
         }
-        let payload: serde_json::Value = response.json().await?;
+        let payload: serde_json::Value = response.json().await.map_err(|_| {
+            AppError::Other("The live room directory returned an invalid response.".into())
+        })?;
         let models = payload["models"].as_array().ok_or_else(|| {
             AppError::Other("The live room directory returned an unexpected response.".into())
         })?;
