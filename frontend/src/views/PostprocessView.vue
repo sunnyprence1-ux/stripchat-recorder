@@ -51,7 +51,6 @@
 		NumberFieldIncrement,
 		NumberFieldInput,
 	} from "@/components/ui/number-field";
-	import PipelineNodeBox from "@/components/PipelineNodeBox.vue";
 	import { useI18n } from "vue-i18n";
 
 	const store = usePostprocessStore();
@@ -511,246 +510,236 @@
 </script>
 
 <template>
-	<div class="pipeline-page flex flex-col gap-6">
-		<header class="rounded-lg bg-[#17241e] p-5 md:p-7 text-[#eef2e9] flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
-			<div>
-				<p class="text-xs uppercase tracking-[0.18em] font-bold text-[#c2f368]">Automation studio</p>
-				<h1 class="mt-2 text-2xl md:text-3xl font-bold mb-1">{{ t("postprocess.title") }}</h1>
-				<p class="text-sm text-white/65">
-					{{ t("postprocess.description") }}
-				</p>
+	<div class="workflow">
+		<aside class="workflow-plan" aria-labelledby="workflow-title">
+			<h1 id="workflow-title">Post-processing</h1>
+			<p>{{ t("postprocess.description") }}</p>
+			<dl>
+				<div><dt>Modules in workflow</dt><dd>{{ nodesWithInfo.length }}</dd></div>
+				<div><dt>Available to add</dt><dd>{{ availableModules.length }}</dd></div>
+			</dl>
+			<Button class="w-full" @click="openPicker">+ {{ t("postprocess.addModule") }}</Button>
+			<p role="status">{{ store.saving ? t("postprocess.saving") : t("postprocess.saved") }}</p>
+		</aside>
+
+		<section class="workflow-sequence" aria-labelledby="sequence-title">
+			<h2 id="sequence-title">Execution order</h2>
+			<div class="workflow-source">
+				<span>IN</span>
+				<div>
+					<strong>{{ t("postprocess.input.label") }}</strong>
+					<p>{{ t("postprocess.input.description") }}</p>
+				</div>
 			</div>
-			<span class="text-sm text-[#c2f368] md:mt-0.5 shrink-0">
-				{{ store.saving ? t("postprocess.saving") : t("postprocess.saved") }}
-			</span>
-		</header>
 
-		<div class="relative">
-			<PipelineNodeBox :label="t('postprocess.input.label')" :description="t('postprocess.input.description')" fixed />
-			<div
-				v-if="store.pipeline.nodes.length > 0"
-				class="absolute left-1/2 -translate-x-1/2 w-0.5 h-6 bg-border"
-				style="bottom: -24px"
-			/>
-		</div>
-
-		<template v-if="store.pipeline.nodes.length > 0">
-			<div
-				v-for="({ node, info }, idx) in nodesWithInfo"
-				:key="node.nodeId"
-				class="relative"
-				:draggable="isDraggingHandle"
-				@dragstart="onDragStart($event, idx)"
-				@dragover="onDragOver($event, idx)"
-				@drop="onDrop($event, idx)"
-				@dragend="onDragEnd"
-			>
-				<div
-					class="border border-border rounded-xl p-4 md:p-5 bg-card shadow-sm transition-opacity"
-					:class="[
-						!node.enabled && 'opacity-50',
-						dragIndex === idx ? 'opacity-30' : '',
-						isModuleMissing(node)
-							? 'border-destructive/70 bg-destructive/5'
-							: dragOverIndex === idx && dragIndex !== idx
-								? 'border-primary'
-								: 'border-transparent',
-					]"
+			<ol v-if="nodesWithInfo.length" class="workflow-stages">
+				<li
+					v-for="({ node, info }, idx) in nodesWithInfo"
+					:key="node.nodeId"
+					class="workflow-stage"
+					:draggable="isDraggingHandle"
+					@dragstart="onDragStart($event, idx)"
+					@dragover="onDragOver($event, idx)"
+					@drop="onDrop($event, idx)"
+					@dragend="onDragEnd"
 				>
-					<!-- 移动端标题与操作按钮分行显示 / On mobile the title and actions take separate lines -->
-					<div class="flex flex-wrap items-center gap-x-3 gap-y-2">
-						<GripVertical
-							class="cursor-grab text-muted-foreground select-none size-5 max-md:hidden"
-							@mousedown="isDraggingHandle = true"
-							@mouseup="isDraggingHandle = false"
-						/>
-
-						<div class="flex-1 min-w-0">
-							<div class="flex items-center gap-2 flex-wrap">
-								<span
-									class="font-medium text-sm"
-									:class="isModuleMissing(node) && 'text-destructive'"
-									>{{ info?.name ?? node.moduleId }}</span
-								>
-								<Badge
-									v-if="isModuleMissing(node)"
-									variant="destructive"
-									class="text-xs"
-									>{{ t("postprocess.node.missing") }}</Badge
-								>
-								<Badge
-									v-else-if="!node.enabled"
-									variant="secondary"
-									class="text-xs"
-									>{{ t("postprocess.node.skipped") }}</Badge
-								>
-							</div>
-							<p class="text-xs text-muted-foreground truncate">
-								{{ info?.description ?? "" }}
-							</p>
-						</div>
-
-						<div
-							class="flex flex-wrap items-center justify-end gap-1.5 md:gap-2 md:shrink-0 max-md:w-full"
-						>
-							<Button
-								v-if="info?.loginable && !isModuleMissing(node)"
-								variant="outline"
-								size="sm"
-								class="h-7 text-xs gap-1.5"
-								:title="t('postprocess.login.hint')"
-								@click="openLogin(node)"
-							>
-								<KeyRound class="size-3.5" />
-								{{ t("postprocess.login.button") }}
-							</Button>
-							<Button
-								v-if="info?.loginable && !isModuleMissing(node) && info?.id === 'notify_telegram'"
-								variant="outline"
-								size="sm"
-								class="h-7 text-xs gap-1.5"
-								:title="t('telegram.reloginHint')"
-								:disabled="reloginRunning"
-								@click="telegramRelogin()"
-							>
-								<RefreshCw class="size-3.5" :class="reloginRunning ? 'animate-spin' : ''" />
-								{{ t("telegram.relogin") }}
-							</Button>
-							<Button
-								v-if="info?.testable && !isModuleMissing(node)"
-								variant="outline"
-								size="sm"
-								class="h-7 text-xs gap-1.5"
-								:title="t('postprocess.test.hint')"
-								@click="runTest(node)"
-							>
-								<FlaskConical class="size-3.5" />
-								{{ t("postprocess.test.button") }}
-							</Button>
-							<Button
-								variant="ghost"
-								size="icon"
-								class="h-7 w-7"
-								:disabled="idx === 0"
-								@click="store.moveNode(node.nodeId, 'up')"
-							><ChevronUp class="size-4" /></Button
-							>
-							<Button
-								variant="ghost"
-								size="icon"
-								class="h-7 w-7"
-								:disabled="idx === store.pipeline.nodes.length - 1"
-								@click="store.moveNode(node.nodeId, 'down')"
-							><ChevronDown class="size-4" /></Button
-							>
-
-							<span class="text-xs text-muted-foreground select-none"
-								>{{ t("postprocess.node.skip") }}</span
-							>
-							<Switch
-								:model-value="!node.enabled"
-								@update:model-value="node.enabled = !$event"
+					<div
+						class="workflow-module"
+						:class="[
+							!node.enabled && 'workflow-module-skipped',
+							dragIndex === idx ? 'opacity-30' : '',
+							isModuleMissing(node)
+								? 'border-destructive/70 bg-destructive/5'
+								: dragOverIndex === idx && dragIndex !== idx
+									? 'border-primary'
+									: '',
+						]"
+					>
+						<!-- 移动端标题与操作按钮分行显示 / On mobile the title and actions take separate lines -->
+						<div class="flex flex-wrap items-center gap-x-3 gap-y-2">
+							<span class="workflow-step">{{ String(idx + 1).padStart(2, "0") }}</span>
+							<GripVertical
+								class="cursor-grab text-muted-foreground select-none size-5 max-md:hidden"
+								@mousedown="isDraggingHandle = true"
+								@mouseup="isDraggingHandle = false"
 							/>
 
-							<Button
-								variant="ghost"
-								size="icon"
-								class="h-7 w-7 text-destructive hover:text-destructive"
-								@click="store.removeNode(node.nodeId)"
-							><X class="size-4" /></Button
-							>
-						</div>
-					</div>
-
-					<div
-						v-if="info?.params.length"
-						class="mt-3 grid grid-cols-1 gap-x-4 gap-y-3 sm:grid-cols-2"
-					>
-						<template
-							v-for="param in info.params"
-							:key="`${node.nodeId}__${param.key}`"
-						>
-							<div class="flex flex-col gap-1.5">
-								<Label class="text-xs">{{ param.label }}</Label>
-
-								<Switch
-									v-if="param.type === 'boolean'"
-									:model-value="boolParam(node, param)"
-									@update:model-value="node.params[param.key] = $event"
-								/>
-
-								<Select
-									v-else-if="param.type === 'select'"
-									:model-value="String(node.params[param.key] ?? param.default)"
-									@update:model-value="
-										node.params[param.key] = String($event ?? param.default)
-									"
-								>
-									<SelectTrigger size="sm" class="w-full">
-										<SelectValue />
-									</SelectTrigger>
-									<SelectContent>
-										<SelectItem
-											v-for="opt in param.options"
-											:key="opt"
-											:value="opt"
-										>
-											{{ opt }}
-										</SelectItem>
-									</SelectContent>
-								</Select>
-
-								<NumberField
-									v-else-if="param.type === 'number'"
-									:model-value="Number(node.params[param.key] ?? param.default)"
-									@update:model-value="node.params[param.key] = $event ?? 0"
-								>
-									<NumberFieldContent>
-										<NumberFieldDecrement />
-										<NumberFieldInput />
-										<NumberFieldIncrement />
-									</NumberFieldContent>
-								</NumberField>
-
-								<Input
-									v-else
-									:model-value="String(node.params[param.key] ?? param.default)"
-									class="h-8 text-sm max-md:h-10"
-									@update:model-value="node.params[param.key] = String($event)"
-								/>
+							<div class="flex-1 min-w-0">
+								<div class="flex items-center gap-2 flex-wrap">
+									<span
+										class="font-semibold text-base"
+										:class="isModuleMissing(node) && 'text-destructive'"
+										>{{ info?.name ?? node.moduleId }}</span
+									>
+									<Badge
+										v-if="isModuleMissing(node)"
+										variant="destructive"
+										class="text-xs"
+										>{{ t("postprocess.node.missing") }}</Badge
+									>
+									<Badge
+										v-else-if="!node.enabled"
+										variant="secondary"
+										class="text-xs"
+										>{{ t("postprocess.node.skipped") }}</Badge
+									>
+								</div>
+								<p class="text-xs text-muted-foreground break-words">
+									{{ info?.description ?? "" }}
+								</p>
 							</div>
-						</template>
+
+							<div
+								class="workflow-actions"
+							>
+								<Button
+									v-if="info?.loginable && !isModuleMissing(node)"
+									variant="outline"
+									size="sm"
+									class="h-7 text-xs gap-1.5"
+									:title="t('postprocess.login.hint')"
+									@click="openLogin(node)"
+								>
+									<KeyRound class="size-3.5" />
+									{{ t("postprocess.login.button") }}
+								</Button>
+								<Button
+									v-if="info?.loginable && !isModuleMissing(node) && info?.id === 'notify_telegram'"
+									variant="outline"
+									size="sm"
+									class="h-7 text-xs gap-1.5"
+									:title="t('telegram.reloginHint')"
+									:disabled="reloginRunning"
+									@click="telegramRelogin()"
+								>
+									<RefreshCw class="size-3.5" :class="reloginRunning ? 'animate-spin' : ''" />
+									{{ t("telegram.relogin") }}
+								</Button>
+								<Button
+									v-if="info?.testable && !isModuleMissing(node)"
+									variant="outline"
+									size="sm"
+									class="h-7 text-xs gap-1.5"
+									:title="t('postprocess.test.hint')"
+									@click="runTest(node)"
+								>
+									<FlaskConical class="size-3.5" />
+									{{ t("postprocess.test.button") }}
+								</Button>
+								<Button
+									variant="ghost"
+									size="icon"
+									class="h-7 w-7"
+									aria-label="Move module up"
+									:disabled="idx === 0"
+									@click="store.moveNode(node.nodeId, 'up')"
+								><ChevronUp class="size-4" /></Button
+								>
+								<Button
+									variant="ghost"
+									size="icon"
+									class="h-7 w-7"
+									aria-label="Move module down"
+									:disabled="idx === store.pipeline.nodes.length - 1"
+									@click="store.moveNode(node.nodeId, 'down')"
+								><ChevronDown class="size-4" /></Button
+								>
+
+								<span class="text-xs text-muted-foreground select-none"
+									>{{ t("postprocess.node.skip") }}</span
+								>
+								<Switch
+									aria-label="Skip module"
+									:model-value="!node.enabled"
+									@update:model-value="node.enabled = !$event"
+								/>
+
+								<Button
+									variant="ghost"
+									size="icon"
+									class="h-7 w-7 text-destructive hover:text-destructive"
+									aria-label="Remove module"
+									@click="store.removeNode(node.nodeId)"
+								><X class="size-4" /></Button
+								>
+							</div>
+						</div>
+
+						<details
+							v-if="info?.params.length"
+							class="workflow-config"
+						>
+							<summary>Module settings <span>{{ info.params.length }}</span></summary>
+							<div class="workflow-fields">
+								<template
+									v-for="param in info.params"
+									:key="`${node.nodeId}__${param.key}`"
+								>
+									<div class="flex flex-col gap-1.5">
+										<Label class="text-xs">{{ param.label }}</Label>
+
+										<Switch
+											v-if="param.type === 'boolean'"
+											:model-value="boolParam(node, param)"
+											@update:model-value="node.params[param.key] = $event"
+										/>
+
+										<Select
+											v-else-if="param.type === 'select'"
+											:model-value="String(node.params[param.key] ?? param.default)"
+											@update:model-value="
+												node.params[param.key] = String($event ?? param.default)
+											"
+										>
+											<SelectTrigger size="sm" class="w-full">
+												<SelectValue />
+											</SelectTrigger>
+											<SelectContent>
+												<SelectItem
+													v-for="opt in param.options"
+													:key="opt"
+													:value="opt"
+												>
+													{{ opt }}
+												</SelectItem>
+											</SelectContent>
+										</Select>
+
+										<NumberField
+											v-else-if="param.type === 'number'"
+											:model-value="Number(node.params[param.key] ?? param.default)"
+											@update:model-value="node.params[param.key] = $event ?? 0"
+										>
+											<NumberFieldContent>
+												<NumberFieldDecrement />
+												<NumberFieldInput />
+												<NumberFieldIncrement />
+											</NumberFieldContent>
+										</NumberField>
+
+										<Input
+											v-else
+											:model-value="String(node.params[param.key] ?? param.default)"
+											class="h-8 text-sm max-md:h-10"
+											@update:model-value="node.params[param.key] = String($event)"
+										/>
+									</div>
+								</template>
+							</div>
+						</details>
 					</div>
-				</div>
-
-				<div
-					v-if="idx < store.pipeline.nodes.length - 1"
-					class="absolute left-1/2 -translate-x-1/2 w-0.5 h-6 bg-border"
-					style="bottom: -24px"
-				/>
-			</div>
-		</template>
-
-		<div class="flex flex-col items-center gap-2">
-			<div
-				v-if="store.pipeline.nodes.length === 0"
-				class="text-sm text-muted-foreground"
-			>
-				{{ t("postprocess.empty") }}
-			</div>
-
-			<Button variant="outline" size="sm" @click="openPicker">
-				{{ t("postprocess.addModule") }}
-			</Button>
-		</div>
+				</li>
+			</ol>
+			<p v-else class="workflow-empty">{{ t("postprocess.empty") }}</p>
+		</section>
 
 		<Dialog :open="showPicker" @update:open="showPicker = $event">
-			<DialogContent class="max-w-sm dialog-max-h overflow-y-auto">
+			<DialogContent class="sm:max-w-2xl max-h-[85dvh] overflow-y-auto">
 				<DialogHeader>
 					<DialogTitle>{{ t("postprocess.picker.title") }}</DialogTitle>
 					<DialogDescription class="sr-only">{{ t("postprocess.picker.description") }}</DialogDescription>
 				</DialogHeader>
-				<div class="flex flex-col gap-1 mt-1">
+				<div class="workflow-catalog">
 					<div
 						v-if="availableModules.length === 0"
 						class="text-sm text-muted-foreground px-2 py-4 text-center"
@@ -767,10 +756,10 @@
 						v-for="mod in availableModules"
 						:key="mod.id"
 						variant="ghost"
-						class="flex flex-col items-start px-3 py-2.5 rounded-lg text-left h-auto w-full whitespace-normal"
+						class="workflow-catalog-item"
 						@click="addModule(mod.id)"
 					>
-						<span class="text-sm font-medium">{{ mod.name }}</span>
+						<span class="workflow-catalog-name"><span>{{ mod.name }}</span><span aria-hidden="true">+</span></span>
 						<span class="text-xs text-muted-foreground">{{
 							mod.description
 						}}</span>
@@ -1174,3 +1163,97 @@
 		</div>
 	</div>
 </template>
+
+<style scoped>
+.workflow {
+	display: grid;
+	gap: clamp(1rem, 3vw, 2.5rem);
+	align-items: start;
+}
+.workflow-plan {
+	display: grid;
+	gap: 1rem;
+	padding: clamp(1rem, 3vw, 1.5rem);
+	background: var(--card);
+	border-top: 3px solid var(--primary);
+}
+.workflow-plan h1 { font-size: clamp(1.5rem, 4vw, 2.25rem); font-weight: 750; line-height: 1.05; }
+.workflow-plan p, .workflow-source p { color: var(--muted-foreground); font-size: .85rem; }
+.workflow-plan dl > div {
+	display: flex;
+	justify-content: space-between;
+	gap: .5rem;
+	padding-block: .65rem;
+	border-top: 1px solid var(--border);
+	font-size: .85rem;
+}
+.workflow-plan dd { font-family: ui-monospace, monospace; color: var(--primary); }
+.workflow-sequence { min-width: 0; }
+.workflow-sequence > h2 { font-size: 1.1rem; font-weight: 650; margin-bottom: .8rem; }
+.workflow-source {
+	display: flex;
+	align-items: center;
+	gap: .8rem;
+	padding: .65rem .85rem;
+	background: var(--muted);
+	border: 1px solid var(--border);
+}
+.workflow-source > span, .workflow-step {
+	flex: none;
+	display: grid;
+	place-items: center;
+	width: 2rem;
+	height: 2rem;
+	font: 650 .8rem ui-monospace, monospace;
+	background: var(--primary);
+	color: var(--primary-foreground);
+}
+.workflow-stages { display: grid; gap: .75rem; border-inline-start: 1px solid var(--border); margin: 0 0 0 .85rem; padding: .75rem 0 0 .65rem; }
+.workflow-stage { min-width: 0; }
+.workflow-module { background: var(--card); border: 1px solid var(--border); padding: .85rem; }
+.workflow-module-skipped .workflow-step { background: var(--muted); color: var(--muted-foreground); }
+.workflow-actions {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: .45rem;
+	flex-basis: 100%;
+	border-top: 1px solid var(--border);
+	padding-top: .65rem;
+	margin-top: .25rem;
+}
+.workflow-actions :deep(button[data-slot="button"]) { min-height: 36px; }
+.workflow-config { margin-top: .75rem; background: var(--background); border: 1px solid var(--border); }
+.workflow-config summary { padding: .65rem .75rem; font-size: .85rem; cursor: pointer; color: var(--primary); }
+.workflow-config summary span { margin-inline-start: .4rem; color: var(--muted-foreground); }
+.workflow-fields { display: grid; gap: .85rem; padding: .85rem; border-top: 1px solid var(--border); }
+.workflow-fields > div { min-width: 0; }
+.workflow-empty { margin-top: .75rem; padding: 1.25rem; border: 1px dashed var(--border); color: var(--muted-foreground); }
+.workflow-catalog { display: grid; gap: .65rem; }
+.workflow-catalog .workflow-catalog-item {
+	display: flex;
+	align-items: stretch;
+	flex-direction: column;
+	height: auto;
+	min-height: 5.75rem;
+	white-space: normal;
+	overflow-wrap: anywhere;
+	text-align: start;
+	padding: .85rem;
+	border: 1px solid var(--border);
+	background: var(--card);
+}
+.workflow-catalog .workflow-catalog-item:hover { background: var(--accent); }
+.workflow-catalog-name { display: flex; justify-content: space-between; gap: .5rem; font-weight: 650; }
+.workflow-catalog-name > :last-child { color: var(--primary); }
+@media (min-width: 40rem) {
+	.workflow-fields, .workflow-catalog { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (min-width: 64rem) {
+	.workflow { grid-template-columns: minmax(13rem, 16rem) minmax(0, 1fr); }
+	.workflow-plan { position: sticky; top: 0; }
+}
+@media (pointer: coarse) {
+	.workflow-actions :deep(button[data-slot="button"]) { min-height: 44px; min-width: 44px; }
+}
+</style>

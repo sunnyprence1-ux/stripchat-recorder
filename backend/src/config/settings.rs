@@ -602,9 +602,20 @@ impl AppState {
         let streamers: Vec<StreamerData> = load_json("streamers.json")
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default();
-        let mouflon_keys: MouflonKeysStore = load_json("mouflon_keys.json")
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default();
+        let key_path = config_dir.join("mouflon_keys.json");
+        let mouflon_keys: MouflonKeysStore = match fs::read_to_string(&key_path) {
+            Ok(json) => serde_json::from_str(&json).map_err(|error| {
+                AppError::Other(format!("Could not parse {}: {}", key_path.display(), error))
+            })?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                MouflonKeysStore::default()
+            }
+            Err(error) => {
+                return Err(AppError::Other(format!(
+                    "Could not read {}: {}", key_path.display(), error
+                )));
+            }
+        };
         let mut pipeline: PipelineConfig = load_json("pipeline.json")
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default();
@@ -662,11 +673,28 @@ impl AppState {
     /// 将当前 `AppData` 拆分序列化并分别写入各配置文件。
     /// Serialize the current `AppData` into split config files.
     pub fn save(&self) -> Result<()> {
-        let data = self.data.read();
+        // Serialize saves so they cannot share the same temporary key file.
+        let data = self.data.write();
         let dir = &self.config_dir;
         fs::write(dir.join("settings.json"), serde_json::to_string_pretty(&data.settings)?)?;
         fs::write(dir.join("streamers.json"), serde_json::to_string_pretty(&data.streamers)?)?;
-        fs::write(dir.join("mouflon_keys.json"), serde_json::to_string_pretty(&data.mouflon_keys)?)?;
+        let key_path = dir.join("mouflon_keys.json");
+        let temp_path = dir.join("mouflon_keys.json.tmp");
+        let serialized = serde_json::to_vec_pretty(&data.mouflon_keys)?;
+        {
+            use std::io::Write;
+            let mut options = fs::OpenOptions::new();
+            options.write(true).create(true).truncate(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                options.mode(0o600);
+            }
+            let mut file = options.open(&temp_path)?;
+            file.write_all(&serialized)?;
+            file.sync_all()?;
+        }
+        fs::rename(&temp_path, &key_path)?;
         fs::write(dir.join("pipeline.json"), serde_json::to_string_pretty(&data.pipeline)?)?;
         fs::write(dir.join("pp_results.json"), serde_json::to_string_pretty(&data.pp_results)?)?;
         Ok(())
@@ -807,19 +835,24 @@ impl AppState {
         let resp = req
             .send()
             .await
-            .map_err(|e| AppError::Other(format!("Worker 请求失败: {}", e)))?;
+            .map_err(|e| AppError::Other(format!("Could not reach the Mouflon sync service: {}", e.without_url())))?;
 
-        if !resp.status().is_success() {
-            return Err(AppError::Other(format!(
-                "Worker 返回错误状态: {}",
-                resp.status()
-            )));
+        let status = resp.status();
+        if !status.is_success() {
+            let message = match status {
+                reqwest::StatusCode::PAYMENT_REQUIRED =>
+                    "The sync service returned HTTP 402 (Payment Required). Check access or billing with the provider, or configure a sync URL you are authorized to use.".to_string(),
+                reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN =>
+                    format!("The sync service denied access (HTTP {}). Check the Sync Token and your access with the provider.", status.as_u16()),
+                _ => format!("The sync service returned HTTP {}. Check the Sync URL or try again later.", status.as_u16()),
+            };
+            return Err(AppError::Other(message));
         }
 
         let resp_text = resp
             .text()
             .await
-            .map_err(|e| AppError::Other(format!("Worker 响应读取失败: {}", e)))?;
+            .map_err(|e| AppError::Other(format!("Could not read the Mouflon sync response: {}", e.without_url())))?;
 
         let (extracted_keys, updated_at) = parse_mouflon_worker_response(&resp_text)?;
 
@@ -1378,7 +1411,7 @@ pub async fn schedule_mouflon_sync(
 /// 3. Flat `{"<pkey>": "<pdkey>", ...}` map
 pub fn parse_mouflon_worker_response(json_str: &str) -> Result<(HashMap<String, String>, String)> {
     let json_val: serde_json::Value = serde_json::from_str(json_str)
-        .map_err(|e| AppError::Other(format!("Worker 响应解析失败: {}", e)))?;
+        .map_err(|e| AppError::Other(format!("The Mouflon sync service returned invalid JSON: {}", e)))?;
 
     let mut extracted_keys = HashMap::new();
     let mut updated_at = String::new();
@@ -1420,7 +1453,7 @@ pub fn parse_mouflon_worker_response(json_str: &str) -> Result<(HashMap<String, 
 
     if extracted_keys.is_empty() {
         return Err(AppError::Other(
-            "Worker 响应中未找到有效的 Mouflon 密钥（缺少 keys 或 pkey2pdkey）".to_string(),
+            "The Mouflon sync response did not contain any valid keys.".to_string(),
         ));
     }
 
