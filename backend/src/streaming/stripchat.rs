@@ -360,7 +360,7 @@ impl StripchatApi {
         const LIMIT: usize = 24;
         let url = self.api_url(&format!(
             "https://stripchat.com/api/front/models?removeShows=false&recInFeatured=false&limit={LIMIT}&offset={}&primaryTag=girls",
-            offset.min(2400)
+            offset
         ));
         let response = self.api_get(&url, &self.referer()).await.map_err(|error| {
             tracing::warn!("Live room directory request failed: {}", error);
@@ -430,7 +430,7 @@ impl StripchatApi {
         }).collect();
         Ok(serde_json::json!({
             "rooms": rooms,
-            "next_offset": (models.len() >= LIMIT && offset < 2400).then_some(offset + LIMIT),
+            "next_offset": if models.len() >= LIMIT { offset.checked_add(LIMIT) } else { None },
         }))
     }
 

@@ -13,7 +13,7 @@
         added - 主播成功添加后触发 / Emitted after streamer is successfully added
 -->
 <script setup lang="ts">
-	import { computed, onMounted, onUnmounted, ref } from "vue";
+	import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 	import { useStreamersStore } from "../stores/streamers";
 	import { useNotify } from "../composables/useNotify";
 	import {
@@ -66,18 +66,30 @@
 		return choices[imageIndex.value[room.username] ?? 0];
 	}
 	const tracked = computed(() => new Set(store.streamers.map((entry) => entry.username.toLowerCase())));
-	const countries = computed(() => [...new Set(rooms.value.map((room) => room.country).filter((value): value is string => !!value))]
-		.sort((a, b) => countryName(a).localeCompare(countryName(b))));
+	// ISO 3166-1 alpha-2 codes keep the picker usable before those countries appear in the directory.
+	const countryCodes = "AD AE AF AG AI AL AM AO AQ AR AS AT AU AW AX AZ BA BB BD BE BF BG BH BI BJ BL BM BN BO BQ BR BS BT BV BW BY BZ CA CC CD CF CG CH CI CK CL CM CN CO CR CU CV CW CX CY CZ DE DJ DK DM DO DZ EC EE EG EH ER ES ET FI FJ FK FM FO FR GA GB GD GE GF GG GH GI GL GM GN GP GQ GR GS GT GU GW GY HK HM HN HR HT HU ID IE IL IM IN IO IQ IR IS IT JE JM JO JP KE KG KH KI KM KN KP KR KW KY KZ LA LB LC LI LK LR LS LT LU LV LY MA MC MD ME MF MG MH MK ML MM MN MO MP MQ MR MS MT MU MV MW MX MY MZ NA NC NE NF NG NI NL NO NP NR NU NZ OM PA PE PF PG PH PK PL PM PN PR PS PT PW PY QA RE RO RS RU RW SA SB SC SD SE SG SH SI SJ SK SL SM SN SO SR SS ST SV SX SY SZ TC TD TF TG TH TJ TK TL TM TN TO TR TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW".split(" ");
+	const countryNameToCode = new Map(countryCodes.map((code) => [countryName(code).toLowerCase(), code]));
+	function countryKey(value?: string | null) {
+		const name = value?.trim() ?? "";
+		if (/^[a-z]{2}$/i.test(name)) return name.toUpperCase() === "UK" ? "GB" : name.toUpperCase();
+		return countryNameToCode.get(name.toLowerCase()) ?? name;
+	}
+	const countries = computed(() => [...new Set([
+		...countryCodes,
+		...rooms.value.map((room) => countryKey(room.country)).filter(Boolean),
+	])].sort((a, b) => countryName(a).localeCompare(countryName(b))));
+
 	const filteredRooms = computed(() => {
 		const query = search.value.trim().toLowerCase();
 		return rooms.value.filter((room) =>
 			(!query || room.username.toLowerCase().includes(query)) &&
-			(!country.value || room.country === country.value) &&
+			(!country.value || countryKey(room.country) === country.value) &&
 			(!hideAdded.value || !tracked.value.has(room.username.toLowerCase()))
 		);
 	});
 
 	const controller = new AbortController();
+	const pageSignatures = new Set<string>();
 
 	async function loadRooms() {
 		const offset = nextOffset.value;
@@ -105,6 +117,16 @@
 				browseError.value = "The recorder returned an unexpected live room response.";
 				return;
 			}
+			const signature = page.rooms.map((room) => room.username.toLowerCase()).sort().join("|");
+			if (signature && pageSignatures.has(signature)) {
+				browseError.value = "The directory repeated a page. Retry to continue searching.";
+				return;
+			}
+			if (page.next_offset !== null && (!Number.isSafeInteger(page.next_offset) || page.next_offset <= offset)) {
+				browseError.value = "The directory did not provide a valid next page.";
+				return;
+			}
+			if (signature) pageSignatures.add(signature);
 			const seen = new Set(rooms.value.map((room) => room.username.toLowerCase()));
 			for (const room of page.rooms) {
 				const name = room.username.toLowerCase();
@@ -133,6 +155,13 @@
 			addingRoom.value = null;
 		}
 	}
+
+	// Continue as each page finishes while a country is selected.
+	watch([country, tab, browsing], () => {
+		if (tab.value === "browse" && country.value && !browseError.value && !controller.signal.aborted) {
+			void loadRooms();
+		}
+	});
 
 	onMounted(loadRooms);
 	onUnmounted(() => controller.abort());
@@ -188,27 +217,27 @@
 			</div>
 
 			<section v-if="tab === 'browse'" aria-label="Live rooms" class="grid gap-3">
-				<div v-if="rooms.length" class="grid gap-2 sm:grid-cols-2">
+				<div class="grid gap-2 sm:grid-cols-2">
 					<label class="grid gap-1 text-sm">Username
 						<Input v-model="search" type="search" placeholder="Filter by username" />
 					</label>
 					<label class="grid gap-1 text-sm">Country
-						<select v-model="country" :disabled="!countries.length" class="min-h-10 rounded-md border bg-card px-2">
-							<option value="">{{ countries.length ? "All countries" : "Country unavailable" }}</option>
+						<select v-model="country" class="min-h-10 rounded-md border bg-card px-2">
+							<option value="">All countries</option>
 							<option v-for="value in countries" :key="value" :value="value">{{ countryName(value) }}</option>
 						</select>
 					</label>
 					<label class="flex min-h-10 items-center gap-2 text-sm sm:col-span-2">
 						<input v-model="hideAdded" type="checkbox" /> Hide already added rooms
 					</label>
-					<p class="text-xs text-muted-foreground sm:col-span-2" role="status">{{ filteredRooms.length }} of {{ rooms.length }} loaded rooms</p>
+					<p class="text-xs text-muted-foreground sm:col-span-2" role="status">{{ country ? `${filteredRooms.length} matching rooms${browsing ? " · Searching directory…" : ""}` : `${filteredRooms.length} of ${rooms.length} loaded rooms` }}</p>
 				</div>
 				<div v-if="filteredRooms.length" class="grid grid-cols-2 gap-2 sm:grid-cols-3">
 					<article v-for="room in filteredRooms" :key="room.username" class="min-w-0 overflow-hidden rounded-md border bg-card">
-						<div class="grid aspect-video place-items-center overflow-hidden bg-muted">
+						<div class="relative grid aspect-[3/4] place-items-center overflow-hidden bg-muted">
 							<img v-if="thumbnail(room)" :key="thumbnail(room)" :src="thumbnail(room)"
 								alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer"
-								class="size-full object-cover" @error="imageIndex[room.username] = (imageIndex[room.username] ?? 0) + 1" />
+								class="absolute inset-0 size-full object-contain" @error="imageIndex[room.username] = (imageIndex[room.username] ?? 0) + 1" />
 							<span v-else aria-hidden="true" class="font-mono text-muted-foreground">{{ room.username.slice(0, 2).toUpperCase() }}</span>
 						</div>
 						<div class="grid gap-2 p-2">
@@ -227,9 +256,9 @@
 				</div>
 				<p v-if="browseError" role="alert" class="text-sm text-muted-foreground">{{ browseError }}</p>
 				<p v-else-if="!browsing && !filteredRooms.length" role="status" class="text-sm text-muted-foreground">
-					{{ rooms.length ? "No loaded rooms match these filters." : "No live rooms on this page." }}
+					{{ rooms.length ? "No rooms match these filters." : "No live rooms on this page." }}
 				</p>
-				<Button v-if="nextOffset !== null" type="button" variant="outline" :disabled="browsing" @click="loadRooms">
+				<Button v-if="nextOffset !== null && (!country || browseError)" type="button" variant="outline" :disabled="browsing" @click="loadRooms">
 					{{ browsing ? 'Loading live rooms…' : browseError ? 'Retry' : 'Load more' }}
 				</Button>
 			</section>
