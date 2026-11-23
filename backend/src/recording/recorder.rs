@@ -43,6 +43,52 @@ const SEGMENT_DOWNLOAD_TIMEOUT: std::time::Duration = std::time::Duration::from_
 /// of blocking the recording loop.
 const PLAYLIST_FETCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
+/// Keep collecting playlist snapshots while the recorder downloads and remuxes.
+struct PlaylistPoller {
+    api: Arc<StripchatApi>,
+    url: String,
+    snapshots: mpsc::Receiver<Result<String>>,
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl PlaylistPoller {
+    fn start(api: &Arc<StripchatApi>, url: &str) -> Self {
+        let (sender, snapshots) = mpsc::channel::<Result<String>>(16);
+        let fetch_api = Arc::clone(api);
+        let fetch_url = url.to_owned();
+        let task = tokio::spawn(async move {
+            let mut previous = None;
+            loop {
+                let was_idle = sender.capacity() == sender.max_capacity();
+                let snapshot = match tokio::time::timeout(
+                    PLAYLIST_FETCH_TIMEOUT, fetch_api.fetch_playlist(&fetch_url),
+                ).await {
+                    Ok(result) => result,
+                    Err(_) => Err(AppError::Other("playlist fetch timed out".into())),
+                };
+                let unchanged = snapshot.as_ref().ok().is_some_and(|body| previous.as_ref() == Some(body));
+                if !unchanged || was_idle {
+                    previous = snapshot.as_ref().ok().cloned();
+                    if sender.capacity() == 0 {
+                        tracing::warn!("Recording playlist queue full; segment processing is behind live polling");
+                    }
+                    if sender.send(snapshot).await.is_err() {
+                        break;
+                    }
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            }
+        });
+        Self { api: Arc::clone(api), url: url.to_owned(), snapshots, task }
+    }
+}
+
+impl Drop for PlaylistPoller {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
 /// 单个录制会话的状态 / State of a single recording session
 #[derive(Debug, Clone)]
 pub struct RecordingSession {
@@ -574,6 +620,7 @@ impl RecorderManager {
         ));
         let mut current_playlist_url = playlist_url.to_string();
         let mut url_prefix = get_url_prefix(&current_playlist_url);
+        let mut playlist_poller = PlaylistPoller::start(&api, &current_playlist_url);
 
         let mut downloaded_sequences: HashSet<u32> = HashSet::new();
         let mut downloaded_urls: HashSet<String> = HashSet::new();
@@ -653,10 +700,13 @@ impl RecorderManager {
             }
 
             let mut wait_next_round = true;
+            if playlist_poller.url != current_playlist_url || !Arc::ptr_eq(&playlist_poller.api, &api) {
+                playlist_poller = PlaylistPoller::start(&api, &current_playlist_url);
+            }
             let result = self
                 .fetch_segments(
                     &api,
-                    &current_playlist_url,
+                    &mut playlist_poller.snapshots,
                     &url_prefix,
                     &mouflon_keys,
                     session_dir,
@@ -791,7 +841,7 @@ impl RecorderManager {
                 tracing::warn!("Stream ended → {} (max retries)", username);
                 break;
             }
-            if wait_next_round {
+            if wait_next_round && playlist_poller.snapshots.is_empty() {
                 // 自适应轮询间隔：若本轮有新分片写入，说明正在产生数据，缩短等待至 500ms 紧随直播边缘；
                 // 若未发现新分片，则等待 1000ms 避免过度请求
                 // Adaptive polling: 500ms when actively receiving segments, 1000ms when idle
@@ -824,7 +874,7 @@ impl RecorderManager {
     async fn fetch_segments(
         self: &Arc<Self>,
         api: &Arc<StripchatApi>,
-        playlist_url: &str,
+        snapshots: &mut mpsc::Receiver<Result<String>>,
         url_prefix: &str,
         mouflon_keys: &HashMap<String, String>,
         session_dir: &mut PathBuf,
@@ -839,12 +889,8 @@ impl RecorderManager {
         segment_file_index: &mut u64,
         emitter: &Arc<dyn Emitter>,
     ) -> Result<(usize, usize)> {
-        let playlist = tokio::time::timeout(
-            PLAYLIST_FETCH_TIMEOUT,
-            api.fetch_playlist(playlist_url),
-        )
-        .await
-        .map_err(|_| AppError::Other("playlist fetch timed out".to_string()))??;
+        let playlist = snapshots.recv().await
+            .ok_or_else(|| AppError::Other("playlist polling stopped".into()))??;
         let (segments, init_url) = parse_playlist(&playlist, url_prefix, mouflon_keys)?;
         let init_url_path = |u: &str| u.split('?').next().unwrap_or(u).to_string();
         let new_init_path = init_url.as_deref().map(init_url_path);
@@ -1109,6 +1155,14 @@ impl RecorderManager {
                                     Some(prev) => segment.sequence > prev.saturating_add(1) || segment.sequence < prev,
                                     None => false,
                                 };
+                                if let Some(previous) = *last_sequence
+                                    && segment.sequence > previous.saturating_add(1)
+                                {
+                                    tracing::warn!(
+                                        "Recording {}: segment sequence jumped from {} to {}; intermediate segments have not been saved",
+                                        username, previous, segment.sequence
+                                    );
+                                }
                                 append_to_m3u8(session_dir, &ts_path, segment.duration_secs, discontinuity);
                                 // Keep the newest sequence seen.  A late retry of
                                 // an older segment must not make reset detection
@@ -1159,7 +1213,13 @@ impl RecorderManager {
 
         // Keep only reservations for failed segments that are still inside the
         // current live window.
-        pending_indices.retain(|key, _| current_keys.contains(key));
+        pending_indices.retain(|key, index| {
+            let still_available = current_keys.contains(key);
+            if !still_available {
+                tracing::warn!("Recording {}: segment {} expired before it could be saved", username, index);
+            }
+            still_available
+        });
 
         Ok((written, cdn_failures))
     }
@@ -1294,6 +1354,7 @@ async fn convert_to_ts(fmp4_data: Vec<u8>, ts_path: &PathBuf) -> Result<()> {
                 .creation_flags(0x08000000)
                 .args(["-y", "-loglevel", "warning", "-i", "pipe:0", "-c", "copy", "-muxdelay", "0", "-avoid_negative_ts", "make_zero", "-fps_mode", "passthrough", "-max_interleave_delta", "0", "-f", "mpegts"])
                 .arg(&tmp_path)
+                .kill_on_drop(true)
                 .stdin(Stdio::piped())
                 .stdout(Stdio::null())
                 .stderr(Stdio::piped())
@@ -1305,6 +1366,7 @@ async fn convert_to_ts(fmp4_data: Vec<u8>, ts_path: &PathBuf) -> Result<()> {
             tokio::process::Command::new("ffmpeg")
                 .args(["-y", "-loglevel", "warning", "-i", "pipe:0", "-c", "copy", "-muxdelay", "0", "-avoid_negative_ts", "make_zero", "-fps_mode", "passthrough", "-max_interleave_delta", "0", "-f", "mpegts"])
                 .arg(&tmp_path)
+                .kill_on_drop(true)
                 .stdin(Stdio::piped())
                 .stdout(Stdio::null())
                 .stderr(Stdio::piped())
@@ -1313,19 +1375,30 @@ async fn convert_to_ts(fmp4_data: Vec<u8>, ts_path: &PathBuf) -> Result<()> {
         }
     };
 
-    if let Some(mut stdin) = child.stdin.take() {
+    let stdin = child.stdin.take().ok_or_else(|| AppError::Other("FFmpeg stdin unavailable".into()))?;
+    let write_input = async move {
         use tokio::io::AsyncWriteExt;
-        let _ = stdin.write_all(&fmp4_data).await;
-        let _ = stdin.shutdown().await;
-    }
+        let mut stdin = stdin;
+        stdin.write_all(&fmp4_data).await?;
+        stdin.shutdown().await
+    };
+    let conversion = tokio::time::timeout(std::time::Duration::from_secs(10), async move {
+        // Drain stderr while writing stdin so FFmpeg cannot deadlock on a full pipe.
+        tokio::join!(write_input, child.wait_with_output())
+    }).await;
 
-    let output = child
-        .wait_with_output()
-        .await
-        .map_err(|e| {
+    let output = match conversion {
+        Ok((Ok(()), Ok(output))) => output,
+        Ok((_, Ok(output))) if !output.status.success() => output,
+        Ok((Err(error), _)) | Ok((_, Err(error))) => {
             let _ = fs::remove_file(&tmp_path);
-            AppError::Other(format!("ffmpeg wait: {}", e))
-        })?;
+            return Err(AppError::Other(format!("FFmpeg segment pipe failed: {error}")));
+        }
+        Err(_) => {
+            let _ = fs::remove_file(&tmp_path);
+            return Err(AppError::Other("FFmpeg segment conversion timed out".into()));
+        }
+    };
 
     if !output.status.success() {
         let err_msg = String::from_utf8_lossy(&output.stderr);
