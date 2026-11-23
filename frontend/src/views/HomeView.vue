@@ -243,18 +243,18 @@
 
 <template>
 	<div class="flex flex-col gap-7">
-		<section class="rounded-2xl bg-[#111b2d] p-5 md:p-7 text-white overflow-hidden relative">
-			<div class="absolute -right-16 -top-20 size-64 rounded-full border-[28px] border-cyan-400/10" />
+		<section class="rounded-2xl bg-[#302c25] p-5 md:p-7 text-white overflow-hidden relative">
+			<div class="absolute -right-16 -top-20 size-64 rounded-full border-[28px] border-[#e6a364]/10" />
 			<div class="relative flex flex-wrap items-end justify-between gap-5">
-				<div><p class="text-xs uppercase tracking-[0.18em] font-bold text-cyan-300">Recording desk</p><h2 class="mt-2 text-2xl md:text-3xl font-bold tracking-tight">Your stream watchlist</h2><p class="mt-2 max-w-lg text-sm text-slate-300">Monitor live rooms, start a capture, and keep your recordings moving.</p></div>
-				<Button class="rounded-xl bg-cyan-400 text-slate-950 hover:bg-cyan-300" @click="showAdd = true">{{ t("home.addStreamer") }}</Button>
+				<div><p class="text-xs uppercase tracking-[0.18em] font-bold text-[#e6a364]">Recording desk</p><h2 class="mt-2 text-2xl md:text-3xl font-bold tracking-tight">Your stream watchlist</h2><p class="mt-2 max-w-lg text-sm text-white/65">Monitor live rooms, start a capture, and keep your recordings moving.</p></div>
+				<Button class="rounded-lg bg-[#d88742] text-[#261c12] hover:bg-[#e6a364]" @click="showAdd = true">{{ t("home.addStreamer") }}</Button>
 			</div>
 		</section>
 
 		<section class="grid grid-cols-2 lg:grid-cols-3 gap-3">
-			<div class="rounded-2xl border border-slate-200 bg-white p-4 dark:border-white/8 dark:bg-[#111927]"><div class="flex items-center justify-between text-slate-500"><span class="text-xs font-bold uppercase tracking-wider">Watching</span><UsersRound class="size-4 text-cyan-500" /></div><p class="mt-3 text-2xl font-bold">{{ store.streamers.length }}</p><p class="text-xs text-slate-500">tracked rooms</p></div>
-			<div class="rounded-2xl border border-slate-200 bg-white p-4 dark:border-white/8 dark:bg-[#111927]"><div class="flex items-center justify-between text-slate-500"><span class="text-xs font-bold uppercase tracking-wider">Live now</span><Radio class="size-4 text-emerald-500" /></div><p class="mt-3 text-2xl font-bold">{{ onlineCount }}</p><p class="text-xs text-slate-500">{{ totalViewers.toLocaleString() }} viewers</p></div>
-			<div class="col-span-2 lg:col-span-1 rounded-2xl border border-slate-200 bg-white p-4 dark:border-white/8 dark:bg-[#111927]"><div class="flex items-center justify-between text-slate-500"><span class="text-xs font-bold uppercase tracking-wider">Capturing</span><CircleDotDashed class="size-4 text-rose-500" /></div><p class="mt-3 text-2xl font-bold">{{ stopAllTargets.length }}</p><p class="text-xs text-slate-500">active recordings</p></div>
+			<div class="rounded-2xl border border-[#e5dfd2] bg-[#faf9f5] p-4 dark:border-white/8 dark:bg-[#211f1b]"><div class="flex items-center justify-between text-muted-foreground"><span class="text-xs font-bold uppercase tracking-wider">Watching</span><UsersRound class="size-4 text-[#bd7c42]" /></div><p class="mt-3 text-2xl font-bold">{{ store.streamers.length }}</p><p class="text-xs text-muted-foreground">tracked rooms</p></div>
+			<div class="rounded-2xl border border-[#e5dfd2] bg-[#faf9f5] p-4 dark:border-white/8 dark:bg-[#211f1b]"><div class="flex items-center justify-between text-muted-foreground"><span class="text-xs font-bold uppercase tracking-wider">Live now</span><Radio class="size-4 text-emerald-600" /></div><p class="mt-3 text-2xl font-bold">{{ onlineCount }}</p><p class="text-xs text-muted-foreground">{{ totalViewers.toLocaleString() }} viewers</p></div>
+			<div class="col-span-2 lg:col-span-1 rounded-2xl border border-[#e5dfd2] bg-[#faf9f5] p-4 dark:border-white/8 dark:bg-[#211f1b]"><div class="flex items-center justify-between text-muted-foreground"><span class="text-xs font-bold uppercase tracking-wider">Capturing</span><CircleDotDashed class="size-4 text-rose-600" /></div><p class="mt-3 text-2xl font-bold">{{ stopAllTargets.length }}</p><p class="text-xs text-muted-foreground">active recordings</p></div>
 		</section>
 
 		<header class="flex flex-wrap items-center justify-between gap-3">
@@ -296,7 +296,7 @@
 
 		<div
 			v-else
-			class="grid grid-cols-[repeat(auto-fill,minmax(min(100%,300px),1fr))] gap-4"
+			class="grid grid-cols-[repeat(auto-fill,minmax(min(100%,280px),1fr))] gap-4"
 		>
 			<StreamerCard
 				v-for="s in [...store.streamers].sort((a, b) =>

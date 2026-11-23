@@ -423,20 +423,21 @@ async function openSimilarDialog(m: ModelResult) {
 <template>
   <div class="finder-page flex flex-col gap-5" @paste.capture="onPaste">
     <!-- Header -->
-    <header>
-      <h1 class="text-xl font-bold mb-0.5">{{ t("finder.title") }}</h1>
-      <p class="text-sm text-muted-foreground">
+    <header class="rounded-2xl bg-[#302c25] p-5 md:p-7 text-[#f3ead8]">
+      <p class="text-xs uppercase tracking-[0.18em] font-bold text-[#e6a364]">Discovery workspace</p>
+      <h1 class="mt-2 text-2xl md:text-3xl font-bold mb-1">{{ t("finder.title") }}</h1>
+      <p class="text-sm text-white/65">
         {{ t("finder.description") }}
       </p>
     </header>
 
     <!-- Tabs -->
-    <div class="flex gap-1 border-b border-border">
+    <div class="flex gap-2 border-b border-border overflow-x-auto">
       <Button
         v-for="tab in [{ key: 'face', label: t('finder.tabs.face') }, { key: 'name', label: t('finder.tabs.name') }]"
         :key="tab.key"
         variant="ghost"
-        class="px-4 py-2 text-sm font-medium transition-colors border-b-2 -mb-px rounded-none"
+        class="px-4 py-3 text-sm font-medium transition-colors border-b-2 -mb-px rounded-t-lg"
         :class="activeTab === tab.key
           ? 'border-primary text-foreground'
           : 'border-transparent text-muted-foreground hover:text-foreground'"

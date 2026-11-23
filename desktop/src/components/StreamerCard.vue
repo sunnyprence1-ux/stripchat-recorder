@@ -54,20 +54,20 @@
 
 	function statusClass(s: StreamerEntry): string {
 		if (!s.is_online) return "bg-zinc-800 text-zinc-400 border-transparent";
-		if (s.status === "公开秀") return "bg-green-900 text-green-300 border-transparent";
+		if (s.status === "Public Show") return "bg-green-900 text-green-300 border-transparent";
 		return "bg-amber-900 text-amber-300 border-transparent";
 	}
 </script>
 
 <template>
 	<Card
-		class="overflow-hidden transition-colors py-0"
+		class="overflow-hidden rounded-2xl border-border bg-card py-0 shadow-sm transition-transform duration-200 hover:-translate-y-0.5"
 		:class="{
 			'border-green-900/50': streamer.is_online && !streamer.is_recording,
 			'border-red-900/50': streamer.is_recording,
 		}"
 	>
-		<div class="relative aspect-video bg-muted overflow-hidden">
+		<div class="relative aspect-[16/9] bg-[#302c25] overflow-hidden">
 			<img
 				v-if="fastThumbnail"
 				:src="fastThumbnail"
@@ -84,11 +84,14 @@
 				v-if="streamer.is_recording"
 				class="absolute top-1.5 right-2 size-2.5 fill-red-500 text-red-500 animate-pulse"
 			/>
+			<div class="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/85 to-transparent px-4 pb-3 pt-10">
+				<p class="truncate text-base font-bold text-white">{{ streamer.username }}</p>
+				<p class="mt-0.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-white/65">{{ streamer.is_recording ? 'Recording' : streamer.is_online ? 'Live room' : 'Watchlist' }}</p>
+			</div>
 		</div>
 
 		<CardContent class="p-3 flex flex-col gap-2">
-			<div class="flex items-center justify-between">
-				<span class="font-semibold text-sm truncate">{{ streamer.username }}</span>
+			<div class="flex items-center justify-end -mt-1">
 				<Button
 					variant="ghost"
 					size="icon"

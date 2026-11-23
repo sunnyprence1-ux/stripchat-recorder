@@ -189,9 +189,10 @@
 
 <template>
 	<div class="relay-page flex flex-col gap-6">
-		<header class="flex flex-wrap items-start justify-between gap-3">
+		<header class="flex flex-wrap items-end justify-between gap-3 border-b border-border pb-5">
 			<div class="min-w-0">
-				<h1 class="text-xl font-bold mb-0.5">{{ t("relay.title") }}</h1>
+				<p class="text-xs uppercase tracking-[0.18em] font-bold text-primary">Live delivery</p>
+				<h1 class="mt-2 text-2xl md:text-3xl font-bold mb-1">{{ t("relay.title") }}</h1>
 				<p class="text-sm text-muted-foreground">
 					{{ t("relay.subtitle", { streams: sessions.length, connections: totalConnections }) }}
 				</p>
@@ -199,9 +200,9 @@
 		</header>
 
 		<!-- 转发流提示 / Relay hint -->
-		<div class="rounded-xl border border-border bg-card px-4 py-4 md:px-6 md:py-5 text-sm">
+		<div class="rounded-xl border border-border bg-[#302c25] px-4 py-4 md:px-6 md:py-5 text-sm text-[#f3ead8]">
 			<p>{{ t("relay.hint") }}</p>
-			<p class="mt-1 font-mono text-xs text-blue-400/60 break-all">
+			<p class="mt-2 rounded-md bg-black/20 px-3 py-2 font-mono text-xs text-[#e6a364] break-all">
 				{{ exampleUrl }}
 			</p>
 		</div>

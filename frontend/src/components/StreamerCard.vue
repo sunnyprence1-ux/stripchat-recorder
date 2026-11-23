@@ -77,13 +77,13 @@
 
 <template>
 	<Card
-		class="overflow-hidden rounded-2xl border-slate-200 bg-white py-0 shadow-sm transition-transform duration-200 hover:-translate-y-0.5 dark:border-white/8 dark:bg-[#111927]"
+		class="overflow-hidden rounded-2xl border-[#e5dfd2] bg-[#faf9f5] py-0 shadow-sm transition-transform duration-200 hover:-translate-y-0.5 dark:border-white/10 dark:bg-[#211f1b]"
 		:class="{
 			'border-green-900/50': streamer.is_online && !streamer.is_recording,
 			'border-red-900/50': streamer.is_recording,
 		}"
 	>
-		<div class="relative aspect-[16/9] bg-slate-900 overflow-hidden">
+		<div class="relative aspect-[16/9] bg-[#302c25] overflow-hidden">
 			<img
 				v-if="fastThumbnail"
 				:src="fastThumbnail"
@@ -100,11 +100,14 @@
 				v-if="streamer.is_recording"
 				class="absolute top-1.5 right-2 size-2.5 fill-red-500 text-red-500 animate-pulse"
 			/>
+			<div class="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/85 to-transparent px-4 pb-3 pt-10">
+				<p class="truncate text-base font-bold text-white">{{ streamer.username }}</p>
+				<p class="mt-0.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-white/65">{{ streamer.is_recording ? 'Recording' : streamer.is_online ? 'Live room' : 'Watchlist' }}</p>
+			</div>
 		</div>
 
 		<CardContent class="p-4 flex flex-col gap-3">
-			<div class="flex items-center justify-between">
-				<span class="font-bold text-base truncate">{{ streamer.username }}</span>
+			<div class="flex items-center justify-end -mt-1">
 				<Button
 					variant="ghost"
 					size="icon"
@@ -116,7 +119,7 @@
 				</Button>
 			</div>
 
-			<div class="flex items-center gap-1.5 flex-wrap border-b border-slate-100 pb-3 dark:border-white/8">
+			<div class="flex items-center gap-1.5 flex-wrap border-b border-[#e5dfd2] pb-3 dark:border-white/10">
 				<Badge :class="statusClass(streamer)">
 					{{ streamer.is_online ? streamer.status : t("streamerCard.offline") }}
 				</Badge>

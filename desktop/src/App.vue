@@ -220,7 +220,7 @@
 			<main class="min-w-0 overflow-hidden bg-[#f0eee8] dark:bg-[#191815]">
 				<header class="h-[4.5rem] md:h-20 border-b border-[#ded9cc] dark:border-white/8 bg-[#faf9f5] dark:bg-[#211f1b] px-4 md:px-8 flex items-center justify-between gap-2">
 					<div class="flex items-center gap-3 min-w-0"><button class="md:hidden grid size-9 shrink-0 place-items-center rounded-lg bg-[#d88742] text-[#261c12] font-black text-xs" @click="router.push('/')">SR</button><div class="min-w-0"><p class="text-[9px] md:text-[10px] tracking-[0.16em] font-bold uppercase text-[#a16c3e]">Studio / Live operations</p><h1 class="truncate text-base md:text-lg font-bold">{{ t(pageTitle) }}</h1></div></div>
-					<div class="flex items-center gap-2 rounded-md bg-[#eeece5] dark:bg-white/5 px-3 py-1.5 text-xs"><span class="size-1.5 rounded-full bg-emerald-500" />{{ recordingCount }} recording</div>
+					<div class="hidden sm:flex items-center gap-2 rounded-md bg-[#eeece5] dark:bg-white/5 px-3 py-1.5 text-xs"><span class="size-1.5 rounded-full bg-emerald-500" />{{ recordingCount }} {{ recordingCount === 1 ? 'recording' : 'recordings' }}</div>
 				</header>
 				<div ref="mainScrollEl" class="h-[calc(100%-4.5rem)] md:h-[calc(100%-5rem)] overflow-y-auto p-4 md:p-8 pb-24 md:pb-8 scrollbar-overlay workspace-surface">
 					<RouterView v-slot="{ Component }">
@@ -230,8 +230,8 @@
 					</RouterView>
 				</div>
 			</main>
-			<nav class="md:hidden fixed inset-x-3 bottom-3 z-40 rounded-xl border border-white/10 bg-[#26231e] shadow-xl" :style="{ paddingBottom: 'env(safe-area-inset-bottom)' }">
-				<div class="flex items-stretch"> <button v-for="item in navItems" :key="item.to" type="button" class="flex h-14 min-w-0 flex-1 flex-col items-center justify-center gap-1 text-[9px]" :class="route.path === item.to ? 'text-[#e9a15b]' : 'text-[#b7afa0]'" :aria-label="t(item.labelKey)" @click="router.push(item.to)"><component :is="item.icon" class="size-4"/><span class="max-w-full truncate px-0.5">{{ t(item.labelKey) }}</span></button></div>
+			<nav class="md:hidden fixed inset-x-2 bottom-2 z-40 rounded-xl border border-white/10 bg-[#26231e] shadow-xl" :style="{ paddingBottom: 'env(safe-area-inset-bottom)' }">
+				<div class="flex items-stretch overflow-x-auto"> <button v-for="item in navItems" :key="item.to" type="button" class="flex h-14 min-w-[52px] flex-1 flex-col items-center justify-center gap-1 text-[9px]" :class="route.path === item.to ? 'text-[#e9a15b]' : 'text-[#b7afa0]'" :aria-current="route.path === item.to ? 'page' : undefined" :aria-label="t(item.labelKey)" @click="router.push(item.to)"><component :is="item.icon" class="size-4"/><span class="max-w-full truncate px-0.5">{{ t(item.labelKey) }}</span></button></div>
 			</nav>
 			<NotifyLayer />
 		</div>

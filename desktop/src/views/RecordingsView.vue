@@ -676,12 +676,13 @@
 
 		<header
 			ref="headerEl"
-			class="flex flex-wrap items-start justify-between gap-4 shrink-0 p-4 md:p-5 bg-card border border-border rounded-xl sticky top-0 z-20"
+			class="flex flex-wrap items-end justify-between gap-4 shrink-0 p-4 md:p-6 bg-[#302c25] text-[#f3ead8] rounded-2xl sticky top-0 z-20"
 		>
 			<div class="flex-1 min-w-0">
-				<h1 class="text-xl font-bold mb-0.5">{{ t("recordings.title") }}</h1>
+				<p class="text-xs uppercase tracking-[0.18em] font-bold text-[#e6a364]">Media library</p>
+				<h1 class="mt-2 text-2xl md:text-3xl font-bold mb-1">{{ t("recordings.title") }}</h1>
 				<div
-					class="flex items-center gap-3 text-sm text-muted-foreground flex-wrap"
+					class="flex items-center gap-3 text-sm text-white/65 flex-wrap"
 				>
 					<span>{{
 						t("recordings.subtitle.total", { count: files.length })
