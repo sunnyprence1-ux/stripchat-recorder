@@ -1116,7 +1116,8 @@
 				Desktop renders a normal table; on mobile (<md) table/tr/td switch to a block grid
 				so each row becomes a card without duplicating the markup.
 			-->
-			<Table v-else class="max-md:block">
+			<div v-else class="w-full min-w-0 overflow-x-auto rounded-xl">
+			<Table class="max-md:block">
 				<TableHeader
 					class="sticky z-10 bg-background max-md:hidden"
 					:style="{ top: `${headerHeight}px` }"
@@ -1507,6 +1508,7 @@
 					</template>
 				</TableBody>
 			</Table>
+			</div>
 		</div>
 	</div>
 </template>

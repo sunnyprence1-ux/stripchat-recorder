@@ -169,6 +169,7 @@
 	const totalConnections = computed(() =>
 		sessions.value.reduce((sum, s) => sum + s.active_connections, 0)
 	);
+	const sortedSessions = computed(() => [...sessions.value].sort((a, b) => a.username.localeCompare(b.username)));
 	const exampleUrl = computed(() => `${window.location.origin}/stream/{modelname}`);
 
 	onMounted(() => {
@@ -189,11 +190,11 @@
 
 <template>
 	<div class="relay-page flex flex-col gap-6">
-		<header class="flex flex-wrap items-end justify-between gap-3 border-b border-border pb-5">
+		<header class="rounded-2xl bg-[#302c25] p-5 md:p-7 text-[#f3ead8] flex flex-wrap items-end justify-between gap-3">
 			<div class="min-w-0">
-				<p class="text-xs uppercase tracking-[0.18em] font-bold text-primary">Live delivery</p>
+				<p class="text-xs uppercase tracking-[0.18em] font-bold text-[#e6a364]">Live delivery</p>
 				<h1 class="mt-2 text-2xl md:text-3xl font-bold mb-1">{{ t("relay.title") }}</h1>
-				<p class="text-sm text-muted-foreground">
+				<p class="text-sm text-white/65">
 					{{ t("relay.subtitle", { streams: sessions.length, connections: totalConnections }) }}
 				</p>
 			</div>
@@ -225,12 +226,12 @@
 			class="grid grid-cols-[repeat(auto-fill,minmax(min(100%,320px),1fr))] gap-4"
 		>
 			<Card
-				v-for="session in [...sessions].sort((a, b) => a.username.localeCompare(b.username))"
+				v-for="session in sortedSessions"
 				:key="session.username"
 				class="overflow-hidden rounded-xl border-border bg-card py-0 shadow-sm"
 				:class="{
 					'border-green-900/50': session.stream_state.type === 'live',
-					'border-blue-900/50': session.stream_state.type === 'connecting',
+					'border-[#d88742]/50': session.stream_state.type === 'connecting',
 					'border-red-900/50': session.stream_state.type === 'error',
 				}"
 			>
@@ -247,7 +248,7 @@
 								class="size-4 shrink-0"
 								:class="{
 									'text-green-400 animate-pulse': session.stream_state.type === 'live',
-									'text-blue-400 animate-spin': session.stream_state.type === 'connecting',
+									'text-[#d88742] animate-spin': session.stream_state.type === 'connecting',
 									'text-red-400': session.stream_state.type === 'error',
 									'text-zinc-500': session.stream_state.type === 'offline',
 								}"
@@ -290,7 +291,7 @@
 						<Button
 							size="sm"
 							variant="ghost"
-							class="shrink-0 px-2 h-7 max-md:h-9 text-muted-foreground hover:text-blue-300"
+							class="shrink-0 px-2 h-7 max-md:h-9 text-muted-foreground hover:text-[#d88742]"
 							:title="t('relay.copyUrl')"
 							@click="copyUrl(session.username, getStreamUrl(session))"
 						>

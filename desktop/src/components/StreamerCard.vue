@@ -45,7 +45,7 @@
 	);
 
 	const thumbnailSrc = computed(() => props.streamer.thumbnail_url ?? null);
-	const fastThumbnail = useFastThumbnail(thumbnailSrc);
+	const { url: fastThumbnail, retry: retryThumbnail } = useFastThumbnail(thumbnailSrc);
 
 	function onAutoChange(val: boolean) {
 		autoRecord.value = val;
@@ -72,7 +72,10 @@
 				v-if="fastThumbnail"
 				:src="fastThumbnail"
 				loading="lazy"
+				decoding="async"
+				:alt="`${streamer.username} room thumbnail`"
 				class="w-full h-full object-cover"
+				@error="retryThumbnail"
 			/>
 			<div
 				v-else
@@ -90,7 +93,7 @@
 			</div>
 		</div>
 
-		<CardContent class="p-3 flex flex-col gap-2">
+		<CardContent class="p-4 flex flex-col gap-3">
 			<div class="flex items-center justify-end -mt-1">
 				<Button
 					variant="ghost"

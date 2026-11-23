@@ -468,7 +468,7 @@ async function openSimilarDialog(m: ModelResult) {
         </div>
 
         <div v-else class="relative flex items-center justify-center p-4 min-h-[160px]">
-          <img :src="previewUrl" class="max-h-48 max-w-full rounded object-contain" alt="预览" />
+          <img :src="previewUrl" class="max-h-48 max-w-full rounded object-contain" alt="Uploaded image preview" />
           <Button
             variant="outline"
             size="icon"

@@ -758,7 +758,8 @@
 				{{ t("recordings.empty") }}
 			</div>
 
-			<Table v-else>
+			<div v-else class="w-full min-w-0 overflow-x-auto rounded-xl">
+			<Table>
 				<TableHeader
 					class="sticky z-10 bg-background"
 					:style="{ top: `${headerHeight}px` }"
@@ -1115,6 +1116,7 @@
 					</template>
 				</TableBody>
 			</Table>
+			</div>
 		</div>
 	</div>
 </template>

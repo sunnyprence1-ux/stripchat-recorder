@@ -46,7 +46,7 @@
 	);
 
 	const thumbnailSrc = computed(() => props.streamer.thumbnail_url ?? null);
-	const fastThumbnail = useFastThumbnail(thumbnailSrc);
+	const { url: fastThumbnail, retry: retryThumbnail } = useFastThumbnail(thumbnailSrc);
 
 	const copied = ref(false);
 
@@ -88,7 +88,10 @@
 				v-if="fastThumbnail"
 				:src="fastThumbnail"
 				loading="lazy"
+				decoding="async"
+				:alt="`${streamer.username} room thumbnail`"
 				class="w-full h-full object-cover"
+				@error="retryThumbnail"
 			/>
 			<div
 				v-else
@@ -171,7 +174,7 @@
 			<!-- 转发流地址（始终显示）/ Stream URL (always shown) -->
 			<div class="flex items-center gap-2">
 				<div
-					class="flex-1 min-w-0 text-xs font-mono text-blue-400/60 bg-blue-950/10 rounded px-2 py-2 md:py-1 truncate select-all"
+					class="flex-1 min-w-0 text-xs font-mono text-[#795a38] dark:text-[#e6a364] bg-[#eee8dc] dark:bg-white/5 rounded px-2 py-2 md:py-1 truncate select-all"
 					:title="t('streamerCard.streamUrlHint')"
 				>
 					{{ streamUrl }}
@@ -179,7 +182,7 @@
 				<Button
 					size="sm"
 					variant="ghost"
-					class="shrink-0 px-2 h-6 max-md:h-9 max-md:w-9 text-muted-foreground hover:text-blue-300"
+					class="shrink-0 px-2 h-6 max-md:h-9 max-md:w-9 text-muted-foreground hover:text-[#d88742]"
 					:title="t('streamerCard.copyStreamUrl')"
 					@click="copyStreamUrl"
 				>

@@ -12,11 +12,11 @@
 		"withGlobalTauri": false,
 		"windows": [
 			{
-				"title": "StripchatRecorder",
-				"width": 1600,
-				"height": 600,
-				"minWidth": 1600,
-				"minHeight": 600,
+				"title": "Capture Desk · Stripchat Recorder",
+				"width": 1280,
+				"height": 820,
+				"minWidth": 320,
+				"minHeight": 480,
 				"resizable": true,
 				"fullscreen": false,
 				"visible": false

@@ -43,6 +43,7 @@
 	);
 	const onlineCount = computed(() => store.streamers.filter((s) => s.is_online).length);
 	const totalViewers = computed(() => store.streamers.reduce((total, s) => total + (s.is_online ? s.viewers : 0), 0));
+	const sortedStreamers = computed(() => [...store.streamers].sort((a, b) => a.username.localeCompare(b.username)));
 
 	onMounted(async () => {
 		store.initListeners();
@@ -299,9 +300,7 @@
 			class="grid grid-cols-[repeat(auto-fill,minmax(min(100%,280px),1fr))] gap-4"
 		>
 			<StreamerCard
-				v-for="s in [...store.streamers].sort((a, b) =>
-					a.username.localeCompare(b.username),
-				)"
+				v-for="s in sortedStreamers"
 				:key="s.username"
 				:streamer="s"
 				@remove="handleRemove(s.username)"

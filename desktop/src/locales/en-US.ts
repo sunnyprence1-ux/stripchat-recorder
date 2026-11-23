@@ -188,7 +188,7 @@ export default {
 				"Signs in with your own account and stores a session file on this device. Your phone number and login code are only sent to Telegram.",
 			connecting: "Starting sign-in…",
 			phoneLabel: "Phone number (international format)",
-			phonePlaceholder: "+8613800138000",
+			phonePlaceholder: "+15551234567",
 			sendCode: "Send Code",
 			codeLabel: "Login code",
 			codeSent:
@@ -284,12 +284,6 @@ export default {
 			recording: "Recording",
 			network: "Network",
 			mouflonKeys: "Mouflon Decryption Keys",
-			language: "Language",
-		},
-		language: {
-			label: "Interface Language",
-			zhCN: "中文",
-			enUS: "English",
 		},
 		outputDir: {
 			label: "Output Directory",
@@ -418,10 +412,6 @@ export default {
 		finish: "Finish Setup",
 		saving: "Saving…",
 		outputDirRequired: "Please enter a recording output directory",
-		step1: {
-			title: "Choose Language",
-			desc: "Select your preferred interface language",
-		},
 		step2: {
 			title: "Recording Output Directory",
 			desc: "Recordings will be saved to this directory. Make sure there is enough disk space.",

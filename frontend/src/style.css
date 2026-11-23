@@ -50,7 +50,7 @@
   --popover: oklch(1 0 0);
   --popover-foreground: oklch(0.145 0 0);
   --primary: oklch(0.58 0.16 48);
-  --primary-foreground: oklch(0.985 0 0);
+  --primary-foreground: oklch(0.2 0.025 55);
   --secondary: oklch(0.91 0.03 90);
   --secondary-foreground: oklch(0.205 0 0);
   --muted: oklch(0.97 0 0);
@@ -83,8 +83,8 @@
   --card-foreground: oklch(0.985 0 0);
   --popover: oklch(0.205 0 0);
   --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.72 0.15 250);
-  --primary-foreground: oklch(0.16 0.025 260);
+  --primary: oklch(0.72 0.14 55);
+  --primary-foreground: oklch(0.2 0.025 55);
   --secondary: oklch(0.269 0 0);
   --secondary-foreground: oklch(0.985 0 0);
   --muted: oklch(0.269 0 0);
@@ -181,7 +181,7 @@
 .library-page > header,
 .pipeline-page > header,
 .relay-page > header {
-  border-radius: var(--radius);
+  border-radius: 1rem;
 }
 .settings-page section h2 {
   color: var(--primary);
@@ -196,12 +196,6 @@
   .finder-page [role="tablist"] {
     max-width: 100%;
   }
-}
-.finder-page > header,
-.library-page > header,
-.pipeline-page > header,
-.relay-page > header {
-  background: color-mix(in oklch, var(--card) 80%, transparent);
 }
 .workspace-surface h1 {
   letter-spacing: -0.025em;

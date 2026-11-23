@@ -271,13 +271,7 @@
     "sections": {
       "recording": "Recording",
       "network": "Network",
-      "mouflonKeys": "Mouflon Decryption Keys",
-      "language": "Language"
-    },
-    "language": {
-      "label": "Interface Language",
-      "zhCN": "中文",
-      "enUS": "English"
+      "mouflonKeys": "Mouflon Decryption Keys"
     },
     "outputDir": {
       "label": "Output Directory",
@@ -397,10 +391,6 @@
     "finish": "Finish Setup",
     "saving": "Saving…",
     "outputDirRequired": "Please enter a recording output directory",
-    "step1": {
-      "title": "Choose Language",
-      "desc": "Select your preferred interface language"
-    },
     "step2": {
       "title": "Recording Output Directory",
       "desc": "Recordings will be saved to this directory. Make sure there is enough disk space.",

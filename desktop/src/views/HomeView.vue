@@ -30,6 +30,7 @@
 	const onlineCount = computed(() => store.streamers.filter((s) => s.is_online).length);
 	const recordingCount = computed(() => store.streamers.filter((s) => s.is_recording).length);
 	const totalViewers = computed(() => store.streamers.reduce((total, s) => total + (s.is_online ? s.viewers : 0), 0));
+	const sortedStreamers = computed(() => [...store.streamers].sort((a, b) => a.username.localeCompare(b.username)));
 	/** 是否显示添加主播对话框 / Whether to show the add streamer dialog */
 	const showAdd = ref(false);
 
@@ -161,12 +162,10 @@
 
 		<div
 			v-else
-			class="grid grid-cols-[repeat(auto-fill,minmax(min(100%,300px),1fr))] gap-4"
+			class="grid grid-cols-[repeat(auto-fill,minmax(min(100%,280px),1fr))] gap-4"
 		>
 			<StreamerCard
-				v-for="s in [...store.streamers].sort((a, b) =>
-					a.username.localeCompare(b.username),
-				)"
+				v-for="s in sortedStreamers"
 				:key="s.username"
 				:streamer="s"
 				@remove="handleRemove(s.username)"
