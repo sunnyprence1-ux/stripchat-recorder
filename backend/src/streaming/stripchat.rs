@@ -358,6 +358,42 @@ impl StripchatApi {
         }
     }
 
+    /// Fetch one bounded page of rooms for the web watchlist picker.
+    pub async fn browse_live_rooms(&self, offset: usize) -> Result<serde_json::Value> {
+        const LIMIT: usize = 24;
+        let url = self.api_url(&format!(
+            "https://stripchat.com/api/front/models?removeShows=false&recInFeatured=false&limit={LIMIT}&offset={}",
+            offset.min(2400)
+        ));
+        let response = self.api_get(&url, &self.referer()).await?;
+        if !response.status().is_success() {
+            return Err(AppError::Other(format!(
+                "The live room directory returned HTTP {}.", response.status().as_u16()
+            )));
+        }
+        let payload: serde_json::Value = response.json().await?;
+        let models = payload["models"].as_array().ok_or_else(|| {
+            AppError::Other("The live room directory returned an unexpected response.".into())
+        })?;
+        let rooms: Vec<_> = models.iter().take(LIMIT).filter_map(|model| {
+            let username = model["username"].as_str()?.trim();
+            if username.is_empty() || model["isOnline"].as_bool() == Some(false)
+                || matches!(model["status"].as_str(), Some("off" | "offline" | "idle"))
+            {
+                return None;
+            }
+            let thumbnail_url = ["previewUrl", "snapshotUrl", "thumbnailUrl"]
+                .iter()
+                .filter_map(|key| model[*key].as_str())
+                .find(|url| url.starts_with("https://"));
+            Some(serde_json::json!({ "username": username, "thumbnail_url": thumbnail_url }))
+        }).collect();
+        Ok(serde_json::json!({
+            "rooms": rooms,
+            "next_offset": (models.len() >= LIMIT && offset < 2400).then_some(offset + LIMIT),
+        }))
+    }
+
     /// 查询主播是否处于群组秀状态，并返回群组秀类型（ticket / perMinute）。
     /// Query whether a streamer is in a group show and return the group show type (ticket / perMinute).
     async fn get_group_show_type(&self, username: &str) -> Option<String> {

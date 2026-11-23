@@ -13,7 +13,7 @@
         added - 主播成功添加后触发 / Emitted after streamer is successfully added
 -->
 <script setup lang="ts">
-	import { ref } from "vue";
+	import { computed, onMounted, onUnmounted, ref } from "vue";
 	import { useStreamersStore } from "../stores/streamers";
 	import { useNotify } from "../composables/useNotify";
 	import {
@@ -35,6 +35,60 @@
 	const { t } = useI18n();
 	const username = ref("");
 	const loading = ref(false);
+
+	type LiveRoom = { username: string; thumbnail_url: string | null };
+	const tab = ref<"browse" | "manual">("browse");
+	const rooms = ref<LiveRoom[]>([]);
+	const nextOffset = ref<number | null>(0);
+	const browsing = ref(false);
+	const browseError = ref("");
+	const addingRoom = ref<string | null>(null);
+	const brokenImages = ref(new Set<string>());
+	const tracked = computed(() => new Set(store.streamers.map((entry) => entry.username.toLowerCase())));
+	const controller = new AbortController();
+
+	async function loadRooms() {
+		const offset = nextOffset.value;
+		if (browsing.value || offset === null) return;
+		browsing.value = true;
+		browseError.value = "";
+		try {
+			const response = await fetch(`/api/live-rooms?offset=${offset}`, {
+				signal: controller.signal,
+			});
+			if (!response.ok) throw new Error(await response.text());
+			const page = await response.json() as { rooms: LiveRoom[]; next_offset: number | null };
+			const seen = new Set(rooms.value.map((room) => room.username.toLowerCase()));
+			for (const room of page.rooms) {
+				const name = room.username.toLowerCase();
+				if (seen.has(name)) continue;
+				seen.add(name);
+				rooms.value.push(room);
+			}
+			nextOffset.value = page.next_offset;
+		} catch {
+			if (!controller.signal.aborted) browseError.value = "Could not load live rooms. Try again or add a room manually.";
+		} finally {
+			browsing.value = false;
+		}
+	}
+
+	async function addRoom(room: LiveRoom) {
+		const name = room.username.toLowerCase();
+		if (addingRoom.value || tracked.value.has(name)) return;
+		addingRoom.value = name;
+		try {
+			await store.addStreamer(name);
+			toast(t("addStreamer.done", { name }), "success");
+		} catch (error) {
+			toast(String(error), "error");
+		} finally {
+			addingRoom.value = null;
+		}
+	}
+
+	onMounted(loadRooms);
+	onUnmounted(() => controller.abort());
 
 	/**
 	 * 从输入中提取用户名：支持直接输入用户名、stripchat.com 链接或 mirror 链接。
@@ -75,20 +129,49 @@
 
 <template>
 	<Dialog :open="true" @update:open="(v) => !v && emit('close')">
-		<DialogContent class="sm:max-w-95 dialog-max-h overflow-y-auto">
+		<DialogContent class="sm:max-w-2xl dialog-max-h overflow-y-auto">
 			<DialogHeader>
 				<DialogTitle>{{ t("addStreamer.title") }}</DialogTitle>
 				<DialogDescription class="sr-only">{{ t("addStreamer.description") }}</DialogDescription>
 			</DialogHeader>
 
-			<form @submit.prevent="submit" class="flex flex-col gap-4 py-2">
+			<div class="flex flex-wrap gap-2" role="group" aria-label="Add method">
+				<Button type="button" :variant="tab === 'browse' ? 'default' : 'outline'" :aria-pressed="tab === 'browse'" @click="tab = 'browse'">Browse live rooms</Button>
+				<Button type="button" :variant="tab === 'manual' ? 'default' : 'outline'" :aria-pressed="tab === 'manual'" :disabled="!!addingRoom" @click="tab = 'manual'">Add manually</Button>
+			</div>
+
+			<section v-if="tab === 'browse'" aria-label="Live rooms" class="grid gap-3">
+				<div v-if="rooms.length" class="grid grid-cols-2 gap-2 sm:grid-cols-3">
+					<article v-for="room in rooms" :key="room.username" class="min-w-0 overflow-hidden rounded-md border bg-card">
+						<div class="grid aspect-video place-items-center overflow-hidden bg-muted">
+							<img v-if="room.thumbnail_url && !brokenImages.has(room.username)" :src="room.thumbnail_url"
+								alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer"
+								class="size-full object-cover" @error="brokenImages.add(room.username)" />
+							<span v-else aria-hidden="true" class="font-mono text-muted-foreground">{{ room.username.slice(0, 2).toUpperCase() }}</span>
+						</div>
+						<div class="grid gap-2 p-2">
+							<h3 class="break-all text-sm font-semibold">{{ room.username }}</h3>
+							<Button size="sm" :disabled="!!addingRoom || tracked.has(room.username.toLowerCase())"
+								:aria-label="'Add ' + room.username" @click="addRoom(room)">
+								{{ tracked.has(room.username.toLowerCase()) ? 'Added' : addingRoom === room.username.toLowerCase() ? 'Adding…' : 'Add' }}
+							</Button>
+						</div>
+					</article>
+				</div>
+				<p v-if="browseError" role="alert" class="text-sm text-muted-foreground">{{ browseError }}</p>
+				<p v-else-if="!browsing && !rooms.length" role="status" class="text-sm text-muted-foreground">No live rooms on this page.</p>
+				<Button v-if="nextOffset !== null" type="button" variant="outline" :disabled="browsing" @click="loadRooms">
+					{{ browsing ? 'Loading live rooms…' : browseError ? 'Retry' : 'Load more' }}
+				</Button>
+			</section>
+
+			<form v-if="tab === 'manual'" @submit.prevent="submit" class="flex flex-col gap-4 py-2">
 				<div class="flex flex-col gap-2">
 					<Label for="username">{{ t("addStreamer.label") }}</Label>
 				<Input
 						id="username"
 						v-model="username"
 						:placeholder="t('addStreamer.placeholder')"
-						autofocus
 						:disabled="loading"
 					/>
 				</div>

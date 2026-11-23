@@ -129,6 +129,7 @@ pub fn build_router(state: ServerState) -> Router {
     // 主路由器先固化 state，再合并转发路由
     // Finalize main router state first, then merge relay router
     let main_router: Router<()> = Router::new()
+        .route("/api/live-rooms", get(browse_live_rooms))
         .route("/api/streamers", get(list_streamers).post(add_streamer))
         .route("/api/streamers/{name}", delete(remove_streamer))
         .route("/api/streamers/{name}/auto-record", post(set_auto_record))
@@ -251,6 +252,25 @@ async fn list_streamers(AxumState(s): AxumState<ServerState>) -> ApiResult<serde
         })
         .collect();
     Ok(Json(serde_json::Value::Array(result)))
+}
+
+#[derive(Deserialize)]
+struct LiveRoomQuery {
+    #[serde(default)]
+    offset: usize,
+}
+
+async fn browse_live_rooms(
+    AxumState(s): AxumState<ServerState>,
+    Query(query): Query<LiveRoomQuery>,
+) -> ApiResult<serde_json::Value> {
+    let settings = s.app_state.get_settings();
+    let api = crate::streaming::stripchat::StripchatApi::new_api_only(
+        settings.api_proxy_url.as_deref(),
+        settings.cdn_proxy_url.as_deref(),
+        settings.sc_mirror_url.as_deref(),
+    ).map_err(ApiError::from)?;
+    Ok(Json(api.browse_live_rooms(query.offset).await.map_err(ApiError::from)?))
 }
 
 #[derive(Deserialize)]
