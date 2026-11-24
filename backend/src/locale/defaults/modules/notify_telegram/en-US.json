@@ -1,6 +1,6 @@
 {
   "name": "Telegram Notification 0.6.0",
-  "description": "Send finished videos to Telegram via MTProto (files over 50 MB and HTTP/SOCKS5 proxies supported). Posts the video only by default — no text at all; the text caption and the cover image each have their own switch. Can create/reuse one group forum topic per model and post the video into it. Uses your signed-in account by default: it can list existing topics (no duplicates) and premium accounts can upload single files up to 4 GB. Supports multiple user sessions: when the current account is upload-throttled, the next signed-in account is used and the file is re-uploaded",
+  "description": "Send finished videos to Telegram via MTProto (files over 50 MB and HTTP/SOCKS5 proxies supported). Posts the video only by default — no text at all; the text caption and the cover image each have their own switch. Can create/reuse one group forum topic per model and post the video into it. Uses your signed-in account by default: it can list existing topics (no duplicates) and files over 2 GB are sent as numbered video parts. Supports multiple user sessions: when the current account is upload-throttled, the next signed-in account is used and the file is re-uploaded",
   "params": {
     "account": {
       "label": "Login mode (auto = your signed-in account wins / user = your account only / bot = bot account only)"

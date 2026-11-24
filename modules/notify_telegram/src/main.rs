@@ -90,7 +90,7 @@ const PROGRESS_SCALE: usize = 10_000;
 const DESCRIBE: &str = r#"{
     "id": "notify_telegram",
     "name": "Telegram Notification 0.6.0",
-    "description": "Send finished videos to Telegram via MTProto (files over 50 MB and HTTP/SOCKS5 proxies supported). Posts the video only by default — no text at all; the text caption and the cover image each have their own switch. Can create/reuse one group forum topic per model and post the video into it. Uses your signed-in account by default: it can list existing topics (no duplicates) and premium accounts can upload single files up to 4 GB. Supports multiple user sessions: when the current account is upload-throttled, the next signed-in account is used and the file is re-uploaded",
+    "description": "Send finished videos to Telegram via MTProto (files over 50 MB and HTTP/SOCKS5 proxies supported). Posts the video only by default — no text at all; the text caption and the cover image each have their own switch. Can create/reuse one group forum topic per model and post the video into it. Uses your signed-in account by default: it can list existing topics (no duplicates) and files over 2 GB are sent as numbered video parts. Supports multiple user sessions: when the current account is upload-throttled, the next signed-in account is used and the file is re-uploaded",
     "testable": true,
     "loginable": true,
     "params": [
@@ -299,9 +299,9 @@ fn resize_cover_for_telegram(img: &Path) -> Result<Option<PathBuf>, String> {
 ///
 /// Extract video thumbnail (used as embedded thumb for InputMediaUploadedDocument).
 /// Telegram MTProto requires the thumbnail to be JPEG and ideally <= 320x320.
-fn extract_video_thumbnail(input: &Path) -> Result<PathBuf, String> {
+fn extract_video_thumbnail(input: &Path, directory: &Path) -> Result<PathBuf, String> {
     let stem = input.file_stem().and_then(|s| s.to_str()).unwrap_or("recording");
-    let thumb_path = tmp_dir().join(format!("{}.tg_thumb.jpg", stem));
+    let thumb_path = directory.join(format!("{}.tg_thumb.jpg", stem));
     let dur = pp_utils::video_duration(input).unwrap_or(0.0);
     let ss = if dur > 10.0 { "5" } else if dur > 2.0 { "1" } else { "0" };
     let status = Command::new("ffmpeg")
@@ -322,125 +322,111 @@ fn extract_video_thumbnail(input: &Path) -> Result<PathBuf, String> {
     Ok(thumb_path)
 }
 
-/// 将视频文件按大小分割为多个片段（用于绕过 Telegram 2GB 文件大小限制）。
-/// 若文件大小未超过限制则直接返回原文件路径。
-///
-/// Split a video file into segments by size (to work around Telegram's 2GB file size limit).
-/// Returns the original file path if it doesn't exceed the limit.
-///
-/// # 参数 / Parameters
-/// - `input`: 输入视频路径 / Input video path
-/// - `max_bytes`: 每个片段的最大字节数 / Maximum bytes per segment
-///
-/// 用 ffprobe 获取视频的平均比特率（bps），失败时返回 None。
-///
-/// Get the average bitrate of a video via ffprobe (bps), returns None on failure.
-fn probe_bitrate(input: &Path) -> Option<u64> {
-    let out = Command::new("ffprobe")
-        .args(["-v", "error", "-show_entries", "format=bit_rate",
-               "-of", "default=noprint_wrappers=1:nokey=1"])
-        .arg(input)
-        .output()
-        .ok()?;
-    let s = String::from_utf8_lossy(&out.stdout);
-    s.trim().parse::<u64>().ok()
-}
+/// Maximum size of each video part, in bytes.
+const VIDEO_PART_LIMIT: u64 = 2_000_000_000;
+static UPLOAD_WORKSPACE_ID: AtomicUsize = AtomicUsize::new(0);
 
-/// 将单个文件切分为不超过 max_bytes 的若干段，返回所有段的路径。
-/// Split a single file into segments not exceeding max_bytes, returns all segment paths.
-fn split_one(input: &Path, max_bytes: u64, dir: &Path, stem: &str, ext: &str, offset: usize) -> Result<Vec<PathBuf>, String> {
-    let file_size = fs::metadata(input).map_err(|e| format!("stat failed: {}", e))?.len();
-    let duration = pp_utils::video_duration(input).unwrap_or(0.0);
-    if duration <= 0.0 { return Err("cannot split: unable to determine video duration".to_string()); }
+struct UploadWorkspace(PathBuf);
 
-    // 优先用 ffprobe 比特率计算，回退到文件大小比例，均留 10% 余量
-    // Prefer ffprobe bitrate for calculation, fall back to file-size ratio; keep 10% margin
-    let seg_duration = if let Some(bps) = probe_bitrate(input).filter(|&b| b > 0) {
-        let max_bits = (max_bytes as f64 * 0.90) * 8.0;
-        (max_bits / bps as f64).floor().max(1.0)
-    } else {
-        let ratio = (max_bytes as f64) / (file_size as f64) * 0.90;
-        (duration * ratio).floor().max(1.0)
-    };
-
-    let n_segs = (duration / seg_duration).ceil() as usize + 1;
-
-    // ffmpeg segment 模式不支持任意起始编号，先生成临时名再重命名
-    // ffmpeg segment mode doesn't support arbitrary start numbers; generate then rename
-    let tmp_dir_path = dir.join(format!("_split_tmp_{}", offset));
-    fs::create_dir_all(&tmp_dir_path).map_err(|e| format!("mkdir failed: {}", e))?;
-    let tmp_pattern = tmp_dir_path.join(format!("seg%03d.{}", ext));
-
-    let status = Command::new("ffmpeg")
-        .args(["-y", "-i"]).arg(input)
-        .args(["-c", "copy", "-f", "segment",
-               "-segment_time", &seg_duration.to_string(),
-               "-reset_timestamps", "1"])
-        .arg(&tmp_pattern)
-        .stdout(Stdio::null()).stderr(Stdio::null())
-        .status()
-        .map_err(|e| format!("ffmpeg not found: {}", e))?;
-
-    if !status.success() { return Err("ffmpeg failed to split video".to_string()); }
-
-    let mut segments: Vec<PathBuf> = (0..n_segs)
-        .map(|i| tmp_dir_path.join(format!("seg{:03}.{}", i, ext)))
-        .filter(|p| p.exists())
-        .collect();
-    segments.sort();
-
-    if segments.is_empty() { return Err("ffmpeg produced no segment files".to_string()); }
-
-    // 重命名为最终路径，编号从 offset 开始
-    // Rename to final paths starting from offset
-    let mut result = Vec::new();
-    for (i, seg) in segments.iter().enumerate() {
-        let dest = dir.join(format!("{}_part{:03}.{}", stem, offset + i, ext));
-        fs::rename(seg, &dest).map_err(|e| format!("rename failed: {}", e))?;
-        result.push(dest);
-    }
-    let _ = fs::remove_dir(&tmp_dir_path);
-    Ok(result)
-}
-
-fn split_video(input: &Path, max_bytes: u64) -> Result<Vec<PathBuf>, String> {
-    let file_size = fs::metadata(input).map_err(|e| format!("stat failed: {}", e))?.len();
-    if file_size <= (max_bytes as f64 * 0.95) as u64 { return Ok(vec![input.to_path_buf()]); }
-
-    let stem = input.file_stem().and_then(|s| s.to_str()).unwrap_or("part");
-    let ext  = input.extension().and_then(|e| e.to_str()).unwrap_or("mp4");
-    let dir  = tmp_dir();
-    // 第一次切分
-    // Initial split
-    let initial = split_one(input, max_bytes, &dir, stem, ext, 0)?;
-
-    // 对仍然超大的分片递归再切，最多重试 2 次
-    // Recursively re-split any oversized segments, up to 2 retries
-    let mut final_segments: Vec<PathBuf> = Vec::new();
-    let mut counter = initial.len();
-    for seg in initial {
-        let seg_size = fs::metadata(&seg).map(|m| m.len()).unwrap_or(0);
-        if seg_size > max_bytes {
-            // 递归切分，编号从当前 counter 开始
-            let sub = split_one(&seg, max_bytes, &dir, stem, ext, counter)?;
-            counter += sub.len();
-            // 删除超大的中间文件
-            let _ = fs::remove_file(&seg);
-            final_segments.extend(sub);
-        } else {
-            final_segments.push(seg);
+impl UploadWorkspace {
+    fn new() -> Result<Self, String> {
+        loop {
+            let id = UPLOAD_WORKSPACE_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let path = tmp_dir().join(format!("telegram-parts-{}-{id}", std::process::id()));
+            match fs::create_dir(&path) {
+                Ok(()) => return Ok(Self(path)),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => return Err(format!("Could not create upload workspace: {error}")),
+            }
         }
     }
+}
 
-    let still_oversized = final_segments.iter()
-        .filter(|p| fs::metadata(p).map(|m| m.len()).unwrap_or(0) > max_bytes)
-        .count();
-    if still_oversized > 0 {
-        return Err(format!("{} segment(s) still exceed the size limit after splitting", still_oversized));
+impl Drop for UploadWorkspace {
+    fn drop(&mut self) {
+        if let Err(error) = fs::remove_dir_all(&self.0) {
+            eprintln!("Could not clean up Telegram upload workspace: {error}");
+        }
+    }
+}
+
+fn split_video(input: &Path, max_bytes: u64, workspace: &Path) -> Result<Vec<PathBuf>, String> {
+    let size = fs::metadata(input).map_err(|e| format!("Could not read video size: {e}"))?.len();
+    if size <= max_bytes {
+        return Ok(vec![input.to_path_buf()]);
+    }
+    let duration = pp_utils::video_duration(input)
+        .filter(|duration| duration.is_finite() && *duration > 0.0)
+        .ok_or("Cannot split video because its duration is unavailable")?;
+    let stem = input.file_stem().and_then(|s| s.to_str()).unwrap_or("video");
+    let ext = input.extension().and_then(|s| s.to_str()).unwrap_or("mp4");
+    let mut seconds = (duration * max_bytes as f64 / size as f64 * 0.85).max(1.0);
+    for attempt in 0..4 {
+        let dir = workspace.join(format!("split-{attempt}"));
+        fs::create_dir(&dir).map_err(|e| format!("Could not create split directory: {e}"))?;
+        let pattern = dir.join(format!("{}_part%06d.{ext}", stem.replace('%', "%%")));
+        let mut cmd = Command::new("ffmpeg");
+        cmd.args(["-nostdin", "-v", "error", "-i"]).arg(input);
+        if attempt < 2 {
+            cmd.args(["-c", "copy"]);
+        } else {
+            // Sparse keyframes can make lossless segments exceed the cap.
+            cmd.args(["-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-c:a", "aac",
+                "-force_key_frames", &format!("expr:gte(t,n_forced*{seconds})")]);
+        }
+        let output = cmd.args(["-f", "segment", "-segment_time", &seconds.to_string(),
+                "-segment_start_number", "1", "-reset_timestamps", "1"])
+            .arg(pattern).output().map_err(|e| format!("Could not start FFmpeg: {e}"))?;
+        if !output.status.success() {
+            return Err(format!("FFmpeg could not split the video: {}", String::from_utf8_lossy(&output.stderr).trim()));
+        }
+
+        let mut parts = Vec::new();
+        let mut largest = 0;
+        for entry in fs::read_dir(&dir).map_err(|e| format!("Could not list video parts: {e}"))? {
+            let entry = entry.map_err(|e| format!("Could not read video part: {e}"))?;
+            let bytes = entry.metadata().map_err(|e| format!("Could not read part size: {e}"))?.len();
+            if bytes == 0 {
+                return Err("FFmpeg produced an empty video part".into());
+            }
+            largest = largest.max(bytes);
+            parts.push(entry.path());
+        }
+        if parts.is_empty() {
+            return Err("FFmpeg produced no video parts".into());
+        }
+        if largest <= max_bytes {
+            parts.sort();
+            println!("Prepared {} video part(s), each at most {} bytes", parts.len(), max_bytes);
+            return Ok(parts);
+        }
+        fs::remove_dir_all(&dir).map_err(|e| format!("Could not remove oversized parts: {e}"))?;
+        seconds = (seconds * (max_bytes as f64 / largest as f64 * 0.8).min(0.65)).max(0.5);
+    }
+    Err("Could not split the video into parts of 2 GB or less".into())
+}
+
+/// Normalize the video format before checking the actual upload size.
+fn prepare_video_parts(input: &Path, workspace: &Path) -> Result<Vec<PathBuf>, String> {
+    let ext = input.extension().and_then(|value| value.to_str()).unwrap_or("");
+    if ext.eq_ignore_ascii_case("mp4") || ext.eq_ignore_ascii_case("mkv") {
+        return split_video(input, VIDEO_PART_LIMIT, workspace);
     }
 
-    final_segments.sort();
-    Ok(final_segments)
+    let stem = input.file_stem().and_then(|value| value.to_str()).unwrap_or("video");
+    let converted = workspace.join(format!("{stem}.mkv"));
+    let remuxed = Command::new("ffmpeg").args(["-nostdin", "-y", "-v", "error", "-i"])
+        .arg(input).args(["-c", "copy"]).arg(&converted)
+        .status().map_err(|e| format!("Could not start FFmpeg: {e}"))?.success();
+    if !remuxed {
+        let output = Command::new("ffmpeg").args(["-nostdin", "-y", "-v", "error", "-i"])
+            .arg(input).args(["-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-c:a", "aac"])
+            .arg(&converted).output().map_err(|e| format!("Could not start FFmpeg: {e}"))?;
+        if !output.status.success() {
+            return Err(format!("FFmpeg could not convert the video: {}", String::from_utf8_lossy(&output.stderr).trim()));
+        }
+    }
+    split_video(&converted, VIDEO_PART_LIMIT, workspace)
 }
 
 /// 话题标题的最大长度（Telegram 限制 128 字符）。
@@ -2617,7 +2603,7 @@ async fn upload_and_send(
     model_name: &str, timestamp: &str, duration_str: &str,
     file_name: &str, file_size_str: &str,
     input: &Path, cover: Option<&Path>, send_video: bool,
-    topic_per_model: bool, video_parts: &[PathBuf],
+    topic_per_model: bool, effective_parts: &[PathBuf], workspace: Option<&Path>,
     send_caption: bool, send_cover: bool, cover_first: bool,
 ) -> Result<(), String> {
     // 文字说明是可选的：关闭后消息里不含任何文字，只有视频（或图片）
@@ -2667,50 +2653,11 @@ async fn upload_and_send(
         effective_cover = None;
     }
 
-    // 处理视频文件：非 mp4/mkv 格式需先重封装，重封装失败则转码
-    // Handle video files: non-mp4/mkv formats need remuxing, falls back to transcoding
-    let mut converted_parts: Vec<PathBuf> = Vec::new();
-    let effective_parts: Vec<PathBuf> = if send_video {
-        let mut parts_out: Vec<PathBuf> = Vec::new();
-        for part in video_parts {
-            let ext = part.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
-            if ext == "mp4" || ext == "mkv" {
-                parts_out.push(part.clone());
-            } else {
-                let tmp = tmp_dir().join(format!(
-                    "{}_tg_tmp.mkv",
-                    part.file_stem().and_then(|s| s.to_str()).unwrap_or("video")
-                ));
-                // 先尝试无损重封装 / Try lossless remux first
-                let remux_ok = Command::new("ffmpeg")
-                    .args(["-y", "-i"]).arg(part)
-                    .args(["-c", "copy", "-movflags", "+faststart"]).arg(&tmp)
-                    .stdout(Stdio::null()).stderr(Stdio::null())
-                    .status().map_err(|e| format!("ffmpeg not found: {}", e))?.success();
-                if !remux_ok {
-                    // 重封装失败则转码为 H.264 + AAC / Fall back to H.264 + AAC transcoding
-                    let ok = Command::new("ffmpeg")
-                        .args(["-y", "-i"]).arg(part)
-                        .args(["-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
-                               "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart"]).arg(&tmp)
-                        .stdout(Stdio::null()).stderr(Stdio::null())
-                        .status().map_err(|e| format!("ffmpeg not found: {}", e))?.success();
-                    if !ok { return Err("ffmpeg failed to convert video to mkv".to_string()); }
-                }
-                converted_parts.push(tmp.clone());
-                parts_out.push(tmp);
-            }
-        }
-        parts_out
-    } else {
-        vec![input.to_path_buf()]
-    };
-
     // 提取每个视频片段的缩略图和元数据 / Extract thumbnail and metadata for each video part
     struct PartMeta { thumb_path: Option<PathBuf>, duration: f64, w: i32, h: i32 }
     let part_metas: Vec<PartMeta> = if send_video {
         effective_parts.iter().map(|p| {
-            let thumb_path = extract_video_thumbnail(p).ok();
+            let thumb_path = workspace.and_then(|dir| extract_video_thumbnail(p, dir).ok());
             let (dur, w, h) = video_meta(p).unwrap_or((0.0, 1280, 720));
             PartMeta { thumb_path, duration: dur, w, h }
         }).collect()
@@ -2773,7 +2720,6 @@ async fn upload_and_send(
         // Serial upload + immediate commit for each video part and its thumbnail.
         let do_upload_and_commit = |done: Arc<AtomicUsize>| {
             let client = client;
-            let effective_parts = &effective_parts;
             let part_metas = &part_metas;
             let peer = &peer;
             async move {
@@ -2834,7 +2780,6 @@ async fn upload_and_send(
         };
 
         let mut committed_parts = do_upload_and_commit(Arc::clone(&done)).await?;
-        for tmp in &converted_parts { let _ = fs::remove_file(tmp); }
 
         // 所有上传完成后才发封面图独立消息，然后发送视频。
         // Post the standalone cover only after every upload succeeded, then send the video.
@@ -2862,9 +2807,13 @@ async fn upload_and_send(
             }
             for (idx, part) in parts.iter().enumerate() {
                 let mut item = InputMedia::new().copy_media(&part.media);
-                if let Some((text, entities)) = &caption
-                    && idx == total_parts - 1
-                {
+                if send_caption && total_parts > 1 {
+                    let (text, entities) = build_caption(
+                        model_name, timestamp, duration_str, file_name, file_size_str,
+                        Some((idx + 1, total_parts)),
+                    );
+                    item = item.fmt_entities(entities).caption(text);
+                } else if let Some((text, entities)) = &caption {
                     item = item.fmt_entities(entities.clone()).caption(text.clone());
                 }
                 items.push(item);
@@ -3146,37 +3095,6 @@ fn read_config() -> Result<TgConfig, String> {
     })
 }
 
-/// Telegram 单文件上传上限：普通账号 2GB，高级会员 4GB。
-/// Maximum single-file upload size: 2GB normally, 4GB for premium accounts.
-const TG_MAX_BYTES_STD: u64 = 2 * 1024 * 1024 * 1024;
-const TG_MAX_BYTES_PREMIUM: u64 = 4 * 1024 * 1024 * 1024;
-
-/// 查询当前账号允许的单文件上传大小。
-///
-/// 机器人账号与普通用户账号为 2GB；用户账号若是 Telegram 高级会员（Premium），
-/// 单文件上限提升到 4GB。
-///
-/// Query the single-file upload size allowed for the signed-in account.
-///
-/// Bot accounts and regular user accounts are limited to 2GB; a premium user account
-/// may upload files up to 4GB without splitting.
-async fn upload_limit_bytes(client: &Client, mode: SessionMode) -> u64 {
-    if mode != SessionMode::User {
-        return TG_MAX_BYTES_STD;
-    }
-    match client.get_me().await {
-        Ok(me) if user_is_premium(&me) => {
-            println!("account: premium user detected, single-file limit raised to 4GB");
-            TG_MAX_BYTES_PREMIUM
-        }
-        Ok(_) => TG_MAX_BYTES_STD,
-        Err(e) => {
-            eprintln!("account: could not query account info ({}), assuming 2GB limit", e);
-            TG_MAX_BYTES_STD
-        }
-    }
-}
-
 /// 自检模式下使用的话题名称（固定名称，重复测试复用同一话题，不会重复创建）。
 /// Topic title used in self-test mode (fixed so repeated tests reuse the same topic).
 const TEST_TOPIC_NAME: &str = "Test";
@@ -3316,7 +3234,7 @@ async fn self_test(cfg: &TgConfig) -> Result<(), String> {
         let clip = make_test_clip()?;
         let size = fs::metadata(&clip).map(|m| m.len() as usize).unwrap_or(0);
         let (duration, w, h) = video_meta(&clip).unwrap_or((3.0, 640, 360));
-        let thumb_path = extract_video_thumbnail(&clip).ok();
+        let thumb_path = extract_video_thumbnail(&clip, &tmp_dir()).ok();
         let thumb_size = thumb_path
             .as_ref()
             .and_then(|p| fs::metadata(p).ok())
@@ -3774,14 +3692,10 @@ fn run() -> Result<(), String> {
         .build()
         .map_err(|e| format!("tokio runtime error: {}", e))?;
 
-    // 分割文件是账号相关的（普通 2GB / 高级 4GB），所以每个会话切换后都重新计算。
-    // Split limits depend on the account (2GB vs 4GB premium), so recompute after a switch.
-    let cleanup_parts = |parts: &[PathBuf]| {
-        for part in parts {
-            if part != &input {
-                let _ = fs::remove_file(part);
-            }
-        }
+    let workspace = send_video.then(UploadWorkspace::new).transpose()?;
+    let effective_parts = match &workspace {
+        Some(workspace) => prepare_video_parts(&input, &workspace.0)?,
+        None => Vec::new(),
     };
 
     let mut final_error: Option<String> = None;
@@ -3798,7 +3712,7 @@ fn run() -> Result<(), String> {
         // 切换账号后必须把整个文件重新上传，不能复用已上传的分块。
         // Every session connects and uploads independently: Telegram InputFile ids are bound to
         // the account/DC, so a switch must re-upload the whole file from scratch.
-        let attempt_result: Result<(Vec<PathBuf>, bool), (String, Vec<PathBuf>, bool)> = runtime.block_on(async {
+        let attempt_result: Result<(), String> = runtime.block_on(async {
             const MAX_OUTER: u32 = 3;
             const RECONNECT_DELAY: Duration = Duration::from_secs(30);
 
@@ -3813,43 +3727,31 @@ fn run() -> Result<(), String> {
             .await
             {
                 Ok(c) => c,
-                Err(e) => return Err((e, Vec::new(), false)),
+                Err(e) => return Err(e),
             };
-            let max_bytes = upload_limit_bytes(&client, session.mode).await;
-
-            let video_parts: Vec<PathBuf> = if send_video {
-                match split_video(&input, max_bytes) {
-                    Ok(parts) => parts,
-                    Err(e) => return Err((e, Vec::new(), false)),
-                }
-            } else {
-                vec![input.clone()]
-            };
-            let is_split = video_parts.len() > 1
-                || video_parts.first().map(|p| p != &input).unwrap_or(false);
-
             let mut attempt = 0u32;
             loop {
                 let result = upload_and_send(
                     &client, session, chat_id, &username,
                     &model_name, &ts_str, &dur_str, &name_str, &size_str,
-                    &input, cover.as_deref(), send_video, topic_per_model, &video_parts,
+                    &input, cover.as_deref(), send_video, topic_per_model,
+                    &effective_parts, workspace.as_ref().map(|dir| dir.0.as_path()),
                     send_caption, send_cover, cover_first,
                 ).await;
                 match result {
-                    Ok(()) => return Ok((video_parts, is_split)),
+                    Ok(()) => return Ok(()),
                     Err(e) => {
                         if is_permanent_telegram_error(&e) {
-                            return Err((e, video_parts, is_split));
+                            return Err(e);
                         }
                         // 上传阶段限流：立即结束当前会话，交给外层切换账号。
                         // Upload-phase flood: end this session immediately so the caller switches.
                         if e.starts_with(FAILOVER_TAG) {
-                            return Err((e, video_parts, is_split));
+                            return Err(e);
                         }
                         attempt += 1;
                         if attempt >= MAX_OUTER {
-                            return Err((e, video_parts, is_split));
+                            return Err(e);
                         }
                         eprintln!(
                             "upload failed on {} (attempt {}/{}): {}. retrying in {:?}…",
@@ -3864,12 +3766,8 @@ fn run() -> Result<(), String> {
         cleanup_session_copy(&session.path);
 
         match attempt_result {
-            Ok((parts, _)) => {
-                cleanup_parts(&parts);
-                break;
-            }
-            Err((e, parts, _)) => {
-                cleanup_parts(&parts);
+            Ok(()) => break,
+            Err(e) => {
                 let failover = e.starts_with(FAILOVER_TAG);
                 let visible = untag_failover(&e).to_string();
                 if failover && idx + 1 < sessions.len() {
@@ -4195,9 +4093,8 @@ mod tests {
     }
 
     #[test]
-    fn upload_limits_are_two_and_four_gigabytes() {
-        assert_eq!(TG_MAX_BYTES_STD, 2 * 1024 * 1024 * 1024);
-        assert_eq!(TG_MAX_BYTES_PREMIUM, 4 * 1024 * 1024 * 1024);
+    fn upload_parts_use_a_two_gigabyte_cap() {
+        assert_eq!(VIDEO_PART_LIMIT, 2_000_000_000);
     }
 
     /// `--describe` 必须声明「发送后删除本地数据」参数，且默认开启。
