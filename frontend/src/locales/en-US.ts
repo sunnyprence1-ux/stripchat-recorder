@@ -409,7 +409,7 @@ export default {
 		},
 		mouflonSyncUrl: {
 			label: "Sync URL",
-			placeholder: "https://mouflon.chantrail.com",
+			placeholder: "https://keys.example.com",
 		},
 		mouflonSyncToken: {
 			label: "Sync Token (optional)",

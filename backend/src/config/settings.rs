@@ -127,7 +127,7 @@ pub struct Settings {
     pub server_port: u16,
     /// Mouflon Keys 同步 Worker URL（为空则不启用自动同步）
     /// Mouflon Keys sync Worker URL (empty = auto-sync disabled)
-    #[serde(default = "default_mouflon_sync_url")]
+    #[serde(default)]
     pub mouflon_sync_url: Option<String>,
     /// Mouflon Keys 同步 Worker 鉴权 Token（对应 Worker 的 AUTH_TOKEN 环境变量）
     /// Mouflon Keys sync Worker auth token (corresponds to Worker's AUTH_TOKEN env var)
@@ -141,11 +141,6 @@ pub struct Settings {
     /// tasks (pipelines + Telegram uploads) running at once (1 = serial, higher = parallel).
     #[serde(default = "default_pp_concurrency")]
     pub pp_concurrency: usize,
-}
-
-/// Mouflon 同步地址的默认值 / Default value for Mouflon sync URL
-fn default_mouflon_sync_url() -> Option<String> {
-    Some("https://mouflon.chantrail.com".to_string())
 }
 
 /// 合并格式的默认值 / Default value for merge format
@@ -289,7 +284,7 @@ impl Default for Settings {
             max_tmp_dir_gb: default_max_tmp_dir_gb(),
             language: default_language(),
             server_port: default_server_port(),
-            mouflon_sync_url: default_mouflon_sync_url(),
+            mouflon_sync_url: None,
             mouflon_sync_token: None,
             setup_done: false,
             pp_concurrency: default_pp_concurrency(),
@@ -1400,13 +1395,13 @@ pub async fn schedule_mouflon_sync(
 
 /// 解析 Worker 返回的 Mouflon 密钥响应 JSON。
 /// 兼容多种 Worker/API 响应格式：
-/// 1. `{"pkey2pdkey": { ... }, "updated_at": "..."}`（mouflon.chantrail.com 格式）
+/// 1. `{"pkey2pdkey": { ... }, "updated_at": "..."}`（远程同步源格式）
 /// 2. `{"keys": { ... }, "updated_at": "..."}`（旧版格式）
 /// 3. `{"<pkey>": "<pdkey>", ...}`（平铺格式）
 ///
 /// Parse the Mouflon key response JSON from a Worker.
 /// Compatible with various formats:
-/// 1. `{"pkey2pdkey": { ... }, "updated_at": "..."}` (mouflon.chantrail.com format)
+/// 1. `{"pkey2pdkey": { ... }, "updated_at": "..."}` (remote sync source format)
 /// 2. `{"keys": { ... }, "updated_at": "..."}` (legacy format)
 /// 3. Flat `{"<pkey>": "<pdkey>", ...}` map
 pub fn parse_mouflon_worker_response(json_str: &str) -> Result<(HashMap<String, String>, String)> {
@@ -1421,7 +1416,7 @@ pub fn parse_mouflon_worker_response(json_str: &str) -> Result<(HashMap<String, 
             updated_at = u.clone();
         }
 
-        // 1. 优先提取 pkey2pdkey 字段（mouflon.chantrail.com 格式）
+        // 1. 优先提取 pkey2pdkey 字段（远程同步源格式）
         if let Some(p2p) = obj.get("pkey2pdkey").and_then(|v| v.as_object()) {
             for (k, v) in p2p {
                 if let Some(val_str) = v.as_str() {
@@ -1583,7 +1578,7 @@ mod tests {
         drop(p2);
     }
 
-    /// 验证 Mouflon Worker 响应解析兼容性：支持 mouflon.chantrail.com 的 pkey2pdkey 格式与哈希 updated_at。
+    /// 验证 Mouflon Worker 响应解析兼容性：支持远程同步源的 pkey2pdkey 格式与哈希 updated_at。
     #[test]
     fn parse_mouflon_worker_response_supports_pkey2pdkey_and_hash() {
         use super::parse_mouflon_worker_response;

@@ -1,8 +1,10 @@
 [package]
 name = "stripchat-recorder-desktop"
 version = "0.3.5"
-description = "Stripchat Stream Recorder (Desktop)"
-authors = ["ChanTrail"]
+description = "Signal Room desktop recorder"
+authors = ["ChanTrail", "sunnyprence1-ux"]
+repository = "https://github.com/sunnyprence1-ux/stripchat-recorder"
+license = "GPL-3.0-only"
 edition = "2024"
 
 [lib]

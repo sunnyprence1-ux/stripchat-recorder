@@ -1,10 +1,10 @@
 services:
   stripchat-recorder:
-    image: chantrail/stripchat-recorder:latest
+    image: ghcr.io/sunnyprence1-ux/stripchat-recorder:latest
     container_name: stripchat-recorder
     restart: unless-stopped
     environment:
-      - TZ=Asia/Shanghai
+      - TZ=${TZ:-UTC}
       # - PORT=3030        # Set to override the server port (default: 3030)
     ports:
       - "${PORT:-3030}:${PORT:-3030}"

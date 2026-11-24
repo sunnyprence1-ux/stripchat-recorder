@@ -1,11 +1,10 @@
-# StripchatRecorder
+# Signal Room deployment and usage
 
-[English](README.en.md)
+[Project overview](README.md) · [Desktop setup](desktop/README.md)
 
 A self-hosted Stripchat live stream recorder with a web-based management UI. Supports automatic recording, post-processing pipelines, and multi-channel notifications.
 
 [![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](https://www.gnu.org/licenses/old-licenses/gpl-3.0.html)
-[![Docker Image](https://img.shields.io/docker/pulls/chantrail/stripchat-recorder)](https://hub.docker.com/r/chantrail/stripchat-recorder)
 
 ---
 
@@ -35,8 +34,7 @@ A self-hosted Stripchat live stream recorder with a web-based management UI. Sup
 - Dual runtime: Tauri desktop app or headless server accessible via browser
 - Real-time UI updates via Server-Sent Events with multi-client sync
 - Responsive UI: bottom tab bar, card layouts and touch-sized controls on phones, full sidebar layout on desktop
-- Dark/light mode following system theme
-- Custom UI language support, see [Custom Locale Guide](docs/custom-locale.en.md)
+- English interface with the Signal Room dark theme
 
 ---
 
@@ -47,11 +45,11 @@ A self-hosted Stripchat live stream recorder with a web-based management UI. Sup
 ```yaml
 services:
   stripchat-recorder:
-    image: chantrail/stripchat-recorder:latest
+    image: ghcr.io/sunnyprence1-ux/stripchat-recorder:latest
     container_name: stripchat-recorder
     restart: unless-stopped
     environment:
-      - TZ=Asia/Shanghai
+      - TZ=UTC
       # - PORT=3030        # Set server port (default: 3030)
     ports:
       - "${PORT:-3030}:${PORT:-3030}"
@@ -89,7 +87,7 @@ The following options are available in the Web UI under Settings:
 
 In the settings page under "Network", you can configure:
 
-Stripchat mirror project: <https://github.com/ChanTrail/StripchatMirror>
+If you use a mirror, configure its host in Settings.
 
 1. API Proxy: used for Stripchat API access; if a mirror is also set, mirror requests go through this proxy.
 2. CDN Proxy: used for downloading live stream chunks; can be configured independently from the API proxy.
@@ -129,14 +127,14 @@ The relay starts automatically on first access and supports multiple simultaneou
 docker run -d \
   --name stripchat-recorder \
   --restart unless-stopped \
-  -e TZ=Asia/Shanghai \
+  -e TZ=UTC \
   -e PORT=3030 \
   -p 3030:3030 \
   -v ./data/logs:/app/stripchat-recorder/logs \
   -v ./data/recordings:/app/stripchat-recorder/recordings \
   -v ./data/modules:/app/stripchat-recorder/modules \
   -v ./data/config:/app/stripchat-recorder/config \
-  chantrail/stripchat-recorder:latest
+  ghcr.io/sunnyprence1-ux/stripchat-recorder:latest
 ```
 
 ---
@@ -174,7 +172,7 @@ The Telegram module supports three login modes, selected with the `account` para
 - `user`: your own account (used even when a Bot Token is filled in). Modules that support login show a **Login** button on their node; enter your phone number and the login code (plus your password if two-step verification is on) and the session is stored in `~/.config/notify_telegram/<api_id>_user.db`. A user account needs neither `api_hash` nor a Bot Token.
 - `bot`: a bot account using a Bot Token. Bots **cannot** list forum topics (`messages.getForumTopics` fails with `BOT_METHOD_INVALID`), so topics rely on the local cache (`~/.config/notify_telegram/topics.tsv`).
 
-A user account can list forum topics, so existing topics are reused reliably and never duplicated. Premium accounts can also upload single files up to 4 GB (2 GB for regular accounts and bots); anything larger is split automatically.
+A user account can list forum topics, so existing topics are reused reliably and never duplicated. Videos over 2 GB are automatically split into numbered parts for every account type.
 
 ### Telegram forum topics
 
@@ -315,7 +313,7 @@ done
 ### Build Docker image
 
 ```bash
-docker build -t chantrail/stripchat-recorder .
+docker build -t ghcr.io/sunnyprence1-ux/stripchat-recorder .
 ```
 
 ---

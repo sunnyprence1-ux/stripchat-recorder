@@ -1,8 +1,8 @@
 FROM debian:latest AS builder
 
-LABEL maintainer="chantrail@chantrail.com" \
+LABEL org.opencontainers.image.source="https://github.com/sunnyprence1-ux/stripchat-recorder" \
       version="0.3.5" \
-      description="Stripchat Recorder Docker builder"
+      description="Signal Room Docker builder"
 
 RUN sed -i 's/deb.debian.org/mirrors.ustc.edu.cn/g' /etc/apt/sources.list.d/debian.sources
 
@@ -66,9 +66,11 @@ RUN . /root/.cargo/env && npm run build \
 # ── Runtime image ──────────────────────────────────────────────────────────────
 FROM debian:latest
 
-LABEL maintainer="chantrail@chantrail.com" \
+LABEL org.opencontainers.image.source="https://github.com/sunnyprence1-ux/stripchat-recorder" \
       version="0.3.5" \
-      description="Stripchat Recorder"
+      org.opencontainers.image.title="Signal Room" \
+      org.opencontainers.image.description="Self-hosted Stripchat recorder" \
+      org.opencontainers.image.licenses="GPL-3.0-only"
 
 RUN sed -i 's/deb.debian.org/mirrors.ustc.edu.cn/g' /etc/apt/sources.list.d/debian.sources
 
@@ -97,6 +99,7 @@ RUN mkdir -p /app/stripchat-recorder/logs \
              /app/stripchat-recorder/config
 WORKDIR /app
 
+COPY LICENSE README.md /app/stripchat-recorder/
 COPY --from=builder /app/build/stripchat-recorder /app/stripchat-recorder/
 COPY --from=builder /app/build/modules/ /app/stripchat-recorder/modules.default/
 COPY --from=builder /opt/google-cloud-sdk /opt/google-cloud-sdk
