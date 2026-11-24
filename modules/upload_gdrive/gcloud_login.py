@@ -17,7 +17,6 @@ The process speaks the same LOGIN_STATE line protocol as the Rust modules:
 from __future__ import annotations
 
 import os
-import pty
 import re
 import select
 import shutil
@@ -28,7 +27,11 @@ from urllib.parse import urlparse
 
 STATE_PREFIX = "LOGIN_STATE:"
 ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
-URL_RE = re.compile(r"https://accounts\.google\.com/[^\s]+")
+URL_RE = re.compile(r"https://accounts\.google\.com/[^\s]+(?=\s)")
+URL_TIMEOUT = 30
+EXCHANGE_TIMEOUT = 45
+ACCOUNT_TIMEOUT = 8
+TOKEN_TIMEOUT = 12
 
 
 def state(value: str) -> None:
@@ -56,8 +59,10 @@ def gcloud_bin() -> str:
 
 
 def gcloud_env() -> dict[str, str]:
-    root = os.environ.get("PP_EXE_DIR") or os.path.dirname(os.path.abspath(__file__))
-    config_dir = os.path.join(root, "config", "upload_gdrive", "gcloud")
+    config_dir = os.environ.get("CLOUDSDK_CONFIG")
+    if not config_dir:
+        root = os.environ.get("PP_EXE_DIR") or os.getcwd()
+        config_dir = os.path.join(root, "config", "upload_gdrive", "gcloud")
     os.makedirs(config_dir, exist_ok=True)
     env = os.environ.copy()
     env["CLOUDSDK_CONFIG"] = config_dir
@@ -94,21 +99,22 @@ def gcloud_env() -> dict[str, str]:
     return env
 
 
-def run_gcloud(args: list[str]) -> subprocess.CompletedProcess[str]:
+def run_gcloud(args: list[str], timeout: int) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [gcloud_bin(), *args],
         env=gcloud_env(),
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        timeout=90,
+        timeout=timeout,
     )
 
 
 def active_account() -> str | None:
     try:
         result = run_gcloud(
-            ["auth", "list", "--filter=status:ACTIVE", "--format=value(account)"]
+            ["auth", "list", "--filter=status:ACTIVE", "--format=value(account)"],
+            ACCOUNT_TIMEOUT,
         )
     except Exception:
         return None
@@ -123,7 +129,7 @@ def active_account() -> str | None:
 
 def has_access_token() -> bool:
     try:
-        result = run_gcloud(["auth", "print-access-token"])
+        result = run_gcloud(["auth", "print-access-token"], TOKEN_TIMEOUT)
     except Exception:
         return False
     return result.returncode == 0 and bool(result.stdout.strip())
@@ -136,8 +142,8 @@ def force_login() -> bool:
 
 def read_until_url(master: int, proc: subprocess.Popen[bytes]) -> tuple[str | None, bytes]:
     output = b""
-    deadline = time.time() + 120
-    while time.time() < deadline:
+    deadline = time.monotonic() + URL_TIMEOUT
+    while time.monotonic() < deadline:
         ready, _, _ = select.select([master], [], [], 0.5)
         if ready:
             try:
@@ -157,8 +163,8 @@ def read_until_url(master: int, proc: subprocess.Popen[bytes]) -> tuple[str | No
 
 def read_remaining(master: int, proc: subprocess.Popen[bytes]) -> bytes:
     output = b""
-    deadline = time.time() + 120
-    while time.time() < deadline:
+    deadline = time.monotonic() + EXCHANGE_TIMEOUT
+    while time.monotonic() < deadline:
         ready, _, _ = select.select([master], [], [], 0.5)
         if ready:
             try:
@@ -168,131 +174,96 @@ def read_remaining(master: int, proc: subprocess.Popen[bytes]) -> bytes:
             if not chunk:
                 break
             output += chunk
-        if proc.poll() is not None:
-            try:
-                while True:
-                    chunk = os.read(master, 4096)
-                    if not chunk:
-                        break
-                    output += chunk
-            except OSError:
-                pass
+        if not ready and proc.poll() is not None:
             break
     return output
 
 
 def main() -> int:
+    try:
+        import pty
+    except ImportError:
+        state("error:Google Drive sign-in requires a Unix host or the Docker edition")
+        return 1
+
     if not force_login():
         account = active_account()
         if account and has_access_token():
             state("already:" + account)
             return 0
 
+    binary = gcloud_bin()
     try:
+        env = gcloud_env()
         master, slave = pty.openpty()
     except OSError as exc:
-        state("error:could not create a pseudo-terminal: " + str(exc))
+        state("error:could not prepare Google sign-in: " + str(exc))
         return 1
 
-    command = [
-        gcloud_bin(),
-        "auth",
-        "login",
-        "--force",
-        "--no-launch-browser",
-        "--enable-gdrive-access",
-    ]
+    proc = None
     try:
-        proc = subprocess.Popen(
-            command,
-            stdin=slave,
-            stdout=slave,
-            stderr=slave,
-            env=gcloud_env(),
-            close_fds=True,
-            preexec_fn=os.setsid,
-        )
+        try:
+            proc = subprocess.Popen(
+                [binary, "auth", "login", "--force", "--no-launch-browser", "--enable-gdrive-access"],
+                stdin=slave, stdout=slave, stderr=slave, env=env,
+                close_fds=True, start_new_session=True,
+            )
+        finally:
+            os.close(slave)
+
+        url, initial_output = read_until_url(master, proc)
+        if not url:
+            if proc.poll() is None:
+                state("error:Google sign-in did not produce a link within "
+                      f"{URL_TIMEOUT} seconds. Check the recorder's connection to Google and its API proxy settings.")
+            else:
+                detail = tail(re.sub(r"https://\S+", "[URL]", initial_output.decode("utf-8", "replace")))
+                state("error:Google sign-in could not start" + (": " + detail if detail else ""))
+            return 1
+        state("device:" + url)
+
+        code = None
+        for line in sys.stdin:
+            line = line.strip()
+            if line in {"quit", "cancel"}:
+                state("cancelled")
+                return 0
+            if line.startswith("code:"):
+                code = line[len("code:"):].strip()
+                break
+
+        if not code:
+            state("error:verification code was not provided")
+            return 1
+        os.write(master, (code + "\n").encode("utf-8"))
+        final_output = read_remaining(master, proc)
+        try:
+            returncode = proc.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            state("error:Google did not finish verifying the code within "
+                  f"{EXCHANGE_TIMEOUT} seconds. Check the recorder's connection to Google and try again.")
+            return 1
+        if returncode != 0:
+            detail = tail(final_output.decode("utf-8", "replace").replace(code, "[code]"))
+            # Exclude OAuth URLs and any verification code echoed by the terminal.
+            detail = re.sub(r"https://\S+", "[URL]", detail)
+            state("error:Google sign-in failed" + (": " + detail if detail else ""))
+            return 1
+
+        account = active_account()
+        if not account:
+            state("error:Google sign-in finished but no active account was found")
+            return 1
+        state("done:" + account)
+        return 0
     except OSError as exc:
-        os.close(slave)
-        state("error:could not start gcloud: " + str(exc))
+        state("error:could not complete Google sign-in: " + str(exc))
         return 1
     finally:
-        try:
-            os.close(slave)
-        except OSError:
-            pass
-
-    url, initial_output = read_until_url(master, proc)
-    if not url:
-        detail = tail(initial_output.decode("utf-8", "replace"))
-        try:
+        os.close(master)
+        if proc is not None and proc.poll() is None:
             proc.kill()
-        except Exception:
-            pass
-        state("error:Google login did not return a URL" + (": " + detail if detail else ""))
-        return 1
-
-    state("device:" + url)
-
-    code: str | None = None
-    for line in sys.stdin:
-        line = line.strip()
-        if line in {"quit", "cancel"}:
-            try:
-                proc.kill()
-            except Exception:
-                pass
-            state("cancelled")
-            return 0
-        if line.startswith("code:"):
-            code = line[len("code:") :].strip()
-            break
-
-    if not code:
-        try:
-            proc.kill()
-        except Exception:
-            pass
-        state("error:verification code was not provided")
-        return 1
-
-    try:
-        os.write(master, (code + "\n").encode("utf-8"))
-    except OSError as exc:
-        state("error:could not submit verification code: " + str(exc))
-        return 1
-
-    final_output = read_remaining(master, proc)
-    try:
-        proc.wait(timeout=15)
-    except Exception:
-        try:
-            proc.kill()
-        except Exception:
-            pass
-        try:
-            proc.wait(timeout=5)
-        except Exception:
-            pass
-
-    if proc.returncode != 0:
-        detail = tail(final_output.decode("utf-8", "replace"))
-        # Do not echo the one-time verification code into the dashboard logs.
-        if code:
-            detail = detail.replace(code, "[code]")
-        state("error:Google login failed" + (": " + detail if detail else ""))
-        return 1
-
-    account = active_account()
-    if not account or not has_access_token():
-        detail = tail(final_output.decode("utf-8", "replace"))
-        if code:
-            detail = detail.replace(code, "[code]")
-        state("error:Google login finished but no access token is available" + (": " + detail if detail else ""))
-        return 1
-
-    state("done:" + account)
-    return 0
+            proc.wait()
 
 
 if __name__ == "__main__":

@@ -104,13 +104,10 @@ COPY --from=builder /app/build/stripchat-recorder /app/stripchat-recorder/
 COPY --from=builder /app/build/modules/ /app/stripchat-recorder/modules.default/
 COPY --from=builder /opt/google-cloud-sdk /opt/google-cloud-sdk
 COPY modules/notify_telegram/wzgram_upload.py /app/stripchat-recorder/wzgram_upload.py
-COPY modules/upload_gdrive/gcloud_login.py /app/stripchat-recorder/gcloud_login.py
 
 RUN chmod +x /app/stripchat-recorder/stripchat-recorder \
-    && chmod +x /app/stripchat-recorder/gcloud_login.py \
     && chmod 0644 /app/stripchat-recorder/wzgram_upload.py \
-    && python3 -m py_compile /app/stripchat-recorder/wzgram_upload.py \
-    && python3 -m py_compile /app/stripchat-recorder/gcloud_login.py
+    && python3 -m py_compile /app/stripchat-recorder/wzgram_upload.py
 
 ENV WZGRAM_PYTHON=/opt/wzgram-venv/bin/python
 ENV PATH="/opt/google-cloud-sdk/bin:${PATH}"

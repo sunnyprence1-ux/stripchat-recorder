@@ -203,27 +203,10 @@ fn run_login() -> Result<(), String> {
         .unwrap_or(false)
         || env::args().any(|a| a == "--fresh" || a == "--force");
 
-    if !force {
-        if let Some(email) = gcloud_account() {
-            if gcloud_access_token().is_ok() {
-                login_state(&format!("already:{}", email));
-                return Ok(());
-            }
-        }
-    } else {
-        // A fresh login must not reuse an old gcloud config with different scopes.
-        let _ = fs::remove_dir_all(gcloud_config_dir());
-    }
-
-    let script = app_root().join("gcloud_login.py");
-    if !script.exists() {
-        login_state("error:gcloud_login.py is missing from the image");
-        return Err(format!("missing {}", script.display()));
-    }
-
+    // Embed the helper so standalone and container releases run the same version.
     let mut command = Command::new("python3");
     command
-        .arg(&script)
+        .args(["-u", "-c", include_str!("../gcloud_login.py")])
         .env("PP_EXE_DIR", app_root())
         .env("CLOUDSDK_CONFIG", gcloud_config_dir())
         .env("PYTHONUNBUFFERED", "1")
@@ -234,7 +217,11 @@ fn run_login() -> Result<(), String> {
 
     let status = command
         .status()
-        .map_err(|e| format!("could not start Google login: {}", e))?;
+        .map_err(|e| {
+            let message = format!("Could not launch Google sign-in. Check that Python 3 is installed: {e}");
+            login_state(&format!("error:{message}"));
+            message
+        })?;
     if !status.success() {
         return Err("Google login failed".to_string());
     }
