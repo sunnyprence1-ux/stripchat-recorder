@@ -2,6 +2,12 @@
 
 Signal Room is a self-hosted Stripchat recorder maintained by **sunnyprence1-ux**. Use the English web or desktop app to monitor live rooms, record streams, manage finished videos, and automate post-processing.
 
+## Mobile web screenshots
+
+| Watchlist | Library | Settings |
+| --- | --- | --- |
+| <img src="docs/screenshots/watchlist.jpg" alt="Signal Room Watchlist with live status filters and recording controls" width="260"> | <img src="docs/screenshots/library.jpg" alt="Signal Room Library with recordings and storage usage" width="260"> | <img src="docs/screenshots/settings.jpg" alt="Signal Room Settings with recording options" width="260"> |
+
 ## Quick start with Docker Compose
 
 Install Docker and the Docker Compose plugin, then run:
